@@ -1,0 +1,54 @@
+---
+title: "Data Science Capstone Notebook"
+author: "Codrin Kruijne"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook for the Data Science pecialization Capstone course.
+
+## Capstone project
+
+The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for the possible following word while typing.
+
+## Week 1
+
+## Task 0: Understanding the problem
+
+### Familiarizing yourself with NLP and text mining
+
+Learn about the basics of natural language processing and how it relates to the data science process you have learned in the Data Science Specialization.
+
+
+###  Technologies used
+My aim is to learn text mining using the [Quanteda package](http://docs.quanteda.io/index.html) for text management and analysis.
+- [Quanteda Quick Start Guide](http://docs.quanteda.io/articles/pkgdown/quickstart.html)
+- [Quanteda tutorial](https://tutorials.quanteda.io)
+- [Quanteda function reference](http://docs.quanteda.io/reference/)
+
+## Task 1: Getting and cleaning the data
+
+```{r cache=TRUE}
+require(quanteda)
+require(readtext)
+```
+
+### Obtaining the data
+
+Can you download the data and load/manipulate it in R?
+
+```{r cache=TRUE}
+
+twitter_data <- readLines("en_US.twitter.txt", skipNul = TRUE)
+str(twitter_data)
+format(object.size(twitter_data), units = "auto")
+news_data <- readLines("en_US.news.txt", skipNul = TRUE)
+str(news_data)
+format(object.size(news_data), units = "auto")
+blogs_data <- readLines("en_US.blogs.txt", skipNul = TRUE)
+str(twitter_data)
+format(object.size(blogs_data), units = "auto")
+
+```
+
