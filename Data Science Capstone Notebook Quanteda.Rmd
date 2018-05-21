@@ -32,6 +32,10 @@ My aim is to learn text mining using the [Quanteda package](http://docs.quanteda
 ```{r cache=TRUE}
 require(quanteda)
 require(readtext)
+require(tidytext)
+require(readr)
+require(dplyr)
+require(ggplot2)
 ```
 
 ### Obtaining the data
@@ -40,15 +44,72 @@ Can you download the data and load/manipulate it in R?
 
 ```{r cache=TRUE}
 
-twitter_data <- readLines("en_US.twitter.txt", skipNul = TRUE)
-str(twitter_data)
-format(object.size(twitter_data), units = "auto")
-news_data <- readLines("en_US.news.txt", skipNul = TRUE)
-str(news_data)
-format(object.size(news_data), units = "auto")
-blogs_data <- readLines("en_US.blogs.txt", skipNul = TRUE)
-str(twitter_data)
-format(object.size(blogs_data), units = "auto")
+# Reading files
+
+twitter_txt <- read_lines("en_US.twitter.txt")
+names(twitter_txt) <- paste0("tweet", 1:length(twitter_txt))
+twitter_df <- data_frame("text" = twitter_txt, id = 1:length(twitter_txt))
+
+news_txt <- read_lines("en_US.news.txt")
+names(news_txt) <- paste0("item", 1:length(news_txt))
+news_df <- data_frame("text" = news_txt, id = 1:length(news_txt))
+
+blogs_txt <- read_lines("en_US.blogs.txt")
+names(blogs_txt) <- paste0("post", 1:length(blogs_txt))
+blogs_df <- data_frame("text" = blogs_txt, id = 1:length(blogs_txt))
+
+# Creating corpi
+
+twitter_corpus <- corpus(twitter_df)
+news_corpus <- corpus(news_df)
+blogs_corpus <- corpus(blogs_df)
+
+collection <- bind_rows("twitter" = twitter_df, "news" = news_df, "blogs" = blogs_df, .id = "type")
+collection_corpus <- corpus(collection)
+
+# lets take samples while we figure things out
+
+twitter_sample <- corpus_sample(twitter_corpus, 100)
+news_sample <- corpus_sample(news_corpus, 100)
+blogs_sample <- corpus_sample(blogs_corpus, 100)
+
+collection_sample <- corpus_sample(collection_corpus, 100)
+```
+
+## Tokenization and ngrams
+
+```{r cache=TRUE}
+
+# collection tokens
+collection_tokens <- tokens(collection_sample, remove_numbers = TRUE, remove_punct = TRUE,
+  remove_symbols = TRUE, remove_separators = TRUE,
+  remove_twitter = TRUE, remove_hyphens = TRUE, remove_url = TRUE)
+
+# ngrams
+collection_unigrams <- collection_tokens
+collection_bigrams <- tokens_ngrams(collection_tokens, n = 2, concatenator = " ")
+collection_trigrams <- tokens_ngrams(collection_tokens, n = 3, concatenator = " ")
+collection_quadrigrams <- tokens_ngrams(collection_tokens, n = 4, concatenator = " ")
+collection_ngrams <- tokens_ngrams(collection_tokens, n = 1:4, concatenator = " ")
+
+# Document Frequency Matrices
+
+uni_dfm <- dfm(collection_unigrams)
+bi_dfm <- dfm(collection_bigrams)
+tri_dfm <- dfm(collection_trigrams)
+quadri_dfm <- dfm(collection_quadrigrams)
+corpus_dfm <- dfm(collection_sample, groups = "type")
+
+```
+
+## Modeling
+
+```{r}
+
+# Documetn Frequency Matrix
+
+
+
 
 ```
 
