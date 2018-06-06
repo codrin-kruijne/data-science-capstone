@@ -1,0 +1,240 @@
+---
+title: "Data Science Capstone Milestone Report"
+author: "Codrin Kruijne"
+date: "12/05/2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Capstone project
+
+The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for the possible following word while typing.
+
+###  Technologies used
+My aim was to get familiar with the [TidyText package](https://www.tidytextmining.com/index.html) for text mining that works well with other tidy packages for R. 
+
+```{r message=FALSE, warning=FALSE}
+require(tm)
+require(tidytext)
+require(tidyr)
+require(stringr)
+require(dplyr)
+require(ggplot2)
+require(gridExtra)
+```
+
+## Training data
+
+Three files were provided with a selection of tweets, news items and blog entries that were obtained by web crawling.
+
+### Obtaining data
+
+```{r cache=TRUE}
+
+twitter_data <- readLines("en_US.twitter.txt", skipNul = TRUE)
+str(twitter_data)
+format(object.size(twitter_data), units = "auto")
+news_data <- readLines("en_US.news.txt", skipNul = TRUE)
+str(news_data)
+format(object.size(news_data), units = "auto")
+blogs_data <- readLines("en_US.blogs.txt", skipNul = TRUE)
+str(twitter_data)
+format(object.size(blogs_data), units = "auto")
+
+```
+### Creating a corpus
+
+Given the rather large files I will take 10 random entries from each source to explore.
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+
+twitter_sample <- as_data_frame(sample(twitter_data, 10))
+news_sample <- as_data_frame(sample(news_data, 10))
+blogs_sample <- as_data_frame(sample(blogs_data, 10))
+
+```
+
+### Preprocessing
+
+- Profanity filtering
+- Twitter text
+- links etc.
+- numbers
+- smileys
+
+
+### Word counts
+
+```{r cache=TRUE}
+
+## Turning samples into collection data frame
+
+collection_sample <- bind_rows("twitter" = twitter_sample, "news" = news_sample, "blogs" = blogs_sample, .id = "source")
+collection_sample$source <- factor(collection_sample$source)
+
+## Tokenization
+
+sample_tokens <- collection_sample %>% unnest_tokens(token, value)
+paste("Tokens in original data: ", count(unique(collection_tokens["token"])))
+
+```
+
+## Language modeling
+
+### Bigram model: predict base on previous word
+
+```{r cache=TRUE}
+
+# Extract bigrams
+
+sample_bigrams <- collection_sample %>% unnest_tokens(bigram, value, token = "ngrams", n = 2)
+
+# Separate bigram words into columns for counting
+
+split_bigrams <- sample_bigrams %>% separate(bigram, c("word1", "word2"), sep = " ")
+bigram_count <- split_bigrams %>% count(word1, word2, sort = TRUE)
+
+# Counting following words
+
+unigram_count <- sample_tokens %>% count(token, sort = TRUE)
+
+raw_bigram_count <- function(split_bigrams){
+
+  # Create raw bigram count matrix
+
+  count_mt <- matrix(0, ncol = length(unique(sample_tokens$token)), nrow = length(unique(sample_tokens$token)), dimnames = list(unique(sample_tokens$token), unique(sample_tokens$token)), byrow = TRUE)
+
+  # for each bigram
+  for(i in 1:nrow(split_bigrams)){
+    bigram <- split_bigrams[i, ]
+    word1 <- as.character(bigram[2])
+    word2 <- as.character(bigram[3])
+    print(paste("Bigram!", word1, word2))
+    # update count in table
+    print(paste("Table content:", count_mt[word1, word2]))
+    count_mt[word1, word2] <- count_mt[word1, word2] + 1
+    print(paste("New table content:", count_mt[word1, word2]))
+  }
+  return(count_mt) # a matrix with counts of features that follow features
+}
+
+raw_bigram_count <- raw_bigram_count(split_bigrams)
+
+# calculate Maximul Likelihood Estimater of bigrams
+
+raw_bigram_probabilities <- function(raw_bigram_count, unigram_count){
+  
+  # create probabilities matrix 
+  prob_mt <- raw_bigram_count
+    
+  # for each cell representing raw bigram counts
+  
+  for(i in 1:nrow(raw_bigram_count)){
+    print(paste("Row:", i))
+    # retrieve rowname
+    word1 <- rownames(raw_bigram_count)[i]
+    print(paste("Rowname a.k.a. word1:", word1))
+    # retrieve word1 count
+    word1_count <- unigram_count[unigram_count$token == word1, ][2]
+    print(paste("Word1 count:", word1_count))
+    
+    # for all columns
+
+    for(j in 1:ncol(raw_bigram_count)){
+      print(paste("Row:", i, "Col:", j))
+      # retrieve bigram count
+      bi_count <- prob_mt[i, j]
+      print(paste("Bigram count:", bi_count))
+      # calculate probability
+      prob <- as.numeric(bi_count / word1_count)
+      str(prob)
+      print(paste("Prob:", prob))
+      # update probability
+      prob_mt[i, j] <- prob
+      print(paste("Probability:", prob_mt[i, j]))
+      #end column loop
+    }
+    # end row loop
+  }
+  
+  prob_mt
+}
+
+raw_bigram_probabilities <- raw_bigram_probabilities(raw_bigram_count, unigram_count)
+
+# Now lets create a lookup table from the raw bigram probabilities
+
+bigram_probs <- function(raw_bigram_probabilities) {
+  
+  bigram.probs <- data.table(given=rep(row.names(raw_bigram_probabilities),
+                                       ncol(raw_bigram_probabilities)),
+                             following=rep(colnames(raw_bigram_probabilities),
+                                           each=nrow(raw_bigram_probabilities)),
+                             prob=as.vector(raw_bigram_probabilities))
+
+  setkey(bigram.probs, given)
+  bigram.probs <- bigram.probs[order(-prob)]
+
+    bigram.probs
+}
+
+bigram_lookup <- bigram_probs(raw_bigram_probabilities)
+
+## A lookup function
+
+predictWord <- function(string, bigram_lookup) {
+  
+  bigram_lookup[given == string][1]$following
+  
+}
+
+
+# How often do tokens follow each other? A simple back off model based on last word frequencies / probabilities given a set of first words
+
+
+# Add-one smoothing of count equals zero
+
+
+
+
+# Calculate Maximum Likelihood Estimators: 
+
+
+
+# n-grams that are aggregated into three columns, a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
+
+# Bigram model: probability of a word given the previous word
+
+
+# Lookup data.table per ngram consisting of three columns: a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
+
+```
+
+
+```{r cache=TRUE}
+
+# Lookup function: given a string, find most probable next word
+
+
+
+# What ngam is the string?
+
+# Lookup ngram in data.table organised by ngram probability
+
+# If not found back off to smaller ngram
+
+# Return most likely wor
+
+```
+
+
+```{r cache=TRUE}
+
+# Prepare app
+
+## Save lookup tables
+
+
+```
+
