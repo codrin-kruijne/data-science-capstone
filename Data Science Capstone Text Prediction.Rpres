@@ -1,0 +1,38 @@
+Data Science Capstone Text Prediction
+========================================================
+author: Codrin Kruijne
+date: 08/06/2018
+autosize: true
+
+First Slide
+========================================================
+
+For more details on authoring R presentations please visit <https://support.rstudio.com/hc/en-us/articles/200486468>.
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+Second SLide
+========================================================
+
+```{r}
+summary(cars)
+```
+
+Third Slide
+========================================================
+
+```{r, echo=FALSE}
+plot(cars)
+```
+
+Fourth Slide
+========================================================
+
+
+
+
+Fifth Slide
+========================================================
+

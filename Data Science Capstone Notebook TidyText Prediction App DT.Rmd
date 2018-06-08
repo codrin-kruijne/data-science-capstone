@@ -15,6 +15,7 @@ The goal of the capstone proejct is to create a Shiny Web app that provides pred
 My aim was to get familiar with the [TidyText package](https://www.tidytextmining.com/index.html) for text mining that works well with other tidy packages for R. 
 
 ```{r message=FALSE, warning=FALSE}
+require(readr)
 require(tm)
 require(tidytext)
 require(tidyr)
@@ -23,6 +24,7 @@ require(dplyr)
 require(ggplot2)
 require(gridExtra)
 require(data.table)
+require(microbenchmark)
 ```
 
 ## Training data
@@ -102,7 +104,7 @@ For ngrams we calculate Maximum Likelihood Estimators by counting ngram frequenc
 
 unigrams <- training_data %>% unnest_tokens(token, text)
 unigram_count <- unigrams %>% count(token, sort = TRUE)
-paste("Tokens in original data: ", count(unique(tokens["token"])))
+paste("Tokens in original data: ", count(unique(unigrams["token"])))
 
 # Extract bigrams
 
@@ -145,6 +147,7 @@ raw_bigram_count <- function(split_bigrams, unigram_count){
 }
 
 raw_bi_count <- raw_bigram_count(split_bigrams, unigram_count)
+#microbenchmark(raw_bi_count <- raw_bigram_count(split_bigrams, unigram_count), times = 10)
 
 # Smoothing: add-one of count equals zero
 
@@ -173,6 +176,7 @@ raw_bigram_probabilities <- function(raw_bi_count, unigram_count){
 }
 
 raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count)
+#microbenchmark(raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count), times = 10)
 
 # n-grams that are aggregated into three columns, a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
 
@@ -198,6 +202,10 @@ bigram_probs <- function(raw_bigram_probabilities) {
 
 bigram_lookup <- bigram_probs(raw_bi_probs)
 
+# Lets save the lookup table as an rds file to send with Shiny App
+
+saveRDS(bigram_lookup, file = "WordPredictor/data/server_lookup.rds")
+
 ## A lookup function: given a string, look up the most probable next word
 
 # What ngam is the string?
@@ -217,6 +225,7 @@ predictWord <- function(string, bigram_lookup) {
 
 ## Ideas for improvement
 
-Add backgroun language model:
+- Add background language model:
 <https://ai.googleblog.com/2006/08/all-our-n-gram-are-belong-to-you.html>
 <https://storage.googleapis.com/books/ngrams/books/datasetsv2.html>
+- More sophisticated smoothing
