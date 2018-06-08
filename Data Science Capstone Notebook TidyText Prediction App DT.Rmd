@@ -1,0 +1,222 @@
+---
+title: "Data Science Capstone Milestone Report"
+author: "Codrin Kruijne"
+date: "12/05/2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Capstone project
+
+The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for the possible following word while typing.
+
+###  Technologies used
+My aim was to get familiar with the [TidyText package](https://www.tidytextmining.com/index.html) for text mining that works well with other tidy packages for R. 
+
+```{r message=FALSE, warning=FALSE}
+require(tm)
+require(tidytext)
+require(tidyr)
+require(stringr)
+require(dplyr)
+require(ggplot2)
+require(gridExtra)
+require(data.table)
+```
+
+## Training data
+
+Three files were provided with a selection of tweets, news items and blog entries that were obtained by web crawling.
+
+### Obtaining data
+
+```{r cache=TRUE}
+
+twitter_txt <- read_lines("en_US.twitter.txt")
+names(twitter_txt) <- paste0("tweet", 1:length(twitter_txt))
+twitter_df <- data_frame("text" = twitter_txt, id = 1:length(twitter_txt))
+
+news_txt <- read_lines("en_US.news.txt")
+names(news_txt) <- paste0("item", 1:length(news_txt))
+news_df <- data_frame("text" = news_txt, id = 1:length(news_txt))
+
+blogs_txt <- read_lines("en_US.blogs.txt")
+names(blogs_txt) <- paste0("post", 1:length(blogs_txt))
+blogs_df <- data_frame("text" = blogs_txt, id = 1:length(blogs_txt))
+
+
+format(object.size(twitter_df), units = "auto")
+format(object.size(news_df), units = "auto")
+format(object.size(blogs_df), units = "auto")
+
+```
+### Creating a corpus
+
+Given the rather large files I will take 10 random entries from each source to explore.
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+
+twitter_sample <- sample_n(twitter_df, 10)
+news_sample <- sample_n(news_df, 10)
+blogs_sample <- sample_n(blogs_df, 10)
+
+```
+
+### Preprocessing
+
+Removing:
+- Profanity filtering
+- Twitter text
+- links etc.
+- numbers
+- smileys
+- abbreviations
+
+Changing
+- word combinations to full: can't -> cannot
+
+
+## Creating samples
+
+```{r cache=TRUE}
+
+## Turning samples into collection data frame
+
+collection_sample <- bind_rows("twitter" = twitter_sample, "news" = news_sample, "blogs" = blogs_sample, .id = "source")
+collection_sample$source <- factor(collection_sample$source)
+
+# Set training sample
+
+training_data <- collection_sample
+
+```
+
+## Language modeling
+
+For ngrams we calculate Maximum Likelihood Estimators by counting ngram frequency of folling word, divided by count of that word.
+
+```{r cache=TRUE}
+
+## Tokenization
+
+unigrams <- training_data %>% unnest_tokens(token, text)
+unigram_count <- unigrams %>% count(token, sort = TRUE)
+paste("Tokens in original data: ", count(unique(tokens["token"])))
+
+# Extract bigrams
+
+bigrams <- training_data %>% unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+# Separate bigram words into columns for counting
+
+split_bigrams <- bigrams %>% separate(bigram, c("word1", "word2"), sep = " ")
+bigram_count <- split_bigrams %>% count(word1, word2, sort = TRUE)
+
+# Counting following words
+
+raw_bigram_count <- function(split_bigrams, unigram_count){
+
+  # Create raw bigram count data.table
+
+  count_mt <- matrix(0,
+                     ncol = length(unique(unigram_count$token)),
+                     nrow = length(unique(unigram_count$token)),
+                     dimnames = list(unique(unigram_count$token), unique(unigram_count$token)),
+                     byrow = TRUE)
+  
+  count_dt <- data.table(count_mt, keep.rownames = TRUE)
+  str(count_dt)
+  
+  # for each bigram
+  for(i in 1:nrow(split_bigrams)){
+    bigram <- split_bigrams[i, ]
+    word1 <- as.character(bigram["word1"])
+    word2 <- as.character(bigram["word2"])
+    print(paste("Bigram!", word1, word2))
+    # update count in table
+    old_count <- as.numeric(count_dt[rn == word1, word2, with = FALSE])
+    print(paste("Table content:", old_count))
+    new_count <- old_count + 1
+    count_dt[rn == word1, (word2) := (new_count)]
+    print(paste("New table content:", count_dt[rn == word1, word2, with = FALSE]))
+  }
+  return(count_dt) # a matrix with counts of features that follow features
+}
+
+raw_bi_count <- raw_bigram_count(split_bigrams, unigram_count)
+
+# Smoothing: add-one of count equals zero
+
+
+
+# Bigram model: calculate Maximul Likelihood Estimater of bigrams
+
+raw_bigram_probabilities <- function(raw_bi_count, unigram_count){
+  
+  # create probabilities data.table 
+  prob_dt <- melt(raw_bi_count)
+  str(prob_dt)
+  uni_dt <- data.table(unigram_count)
+  str(uni_dt)
+    
+  # for unigram; divide raw bigram count row by unigram count value
+  
+  for(i in 1:nrow(uni_dt)){
+      uni_token <- as.character(uni_dt[i, 1])
+      uni_count <- as.numeric(uni_dt[i, 2])
+      print(paste("Token: ", uni_token, ". Count: ", uni_count))
+      prob_dt[rn == (uni_token), value := value / uni_count, by = rn]
+  }
+  
+  prob_dt
+}
+
+raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count)
+
+# n-grams that are aggregated into three columns, a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
+
+```
+
+## Looking up the most probable next word given an input string
+
+```{r cache=TRUE}
+
+# Now lets create a lookup table from the raw bigram probabilities
+
+# Lookup data.table per ngram consisting of three columns: a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
+
+bigram_probs <- function(raw_bigram_probabilities) {
+  
+  bi_probs <- raw_bigram_probabilities
+
+  setkey(bi_probs, rn)
+  bi_probs <- bi_probs[order(-value)]
+
+  bi_probs
+}
+
+bigram_lookup <- bigram_probs(raw_bi_probs)
+
+## A lookup function: given a string, look up the most probable next word
+
+# What ngam is the string?
+
+# Lookup ngram in data.table organised by ngram probability
+
+# If not found _back off_ to smaller ngram prediction
+
+predictWord <- function(string, bigram_lookup) {
+  
+  bigram_lookup[rn == string][1]$variable
+  
+}
+
+```
+
+
+## Ideas for improvement
+
+Add backgroun language model:
+<https://ai.googleblog.com/2006/08/all-our-n-gram-are-belong-to-you.html>
+<https://storage.googleapis.com/books/ngrams/books/datasetsv2.html>
