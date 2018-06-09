@@ -17,14 +17,12 @@ My aim was to get familiar with the [TidyText package](https://www.tidytextminin
 ```{r message=FALSE, warning=FALSE}
 
 require(tm)
-require(tidytext)
 require(tidyr)
 require(stringr)
-
 require(ggplot2)
 require(gridExtra)
-require(data.table)
 require(microbenchmark)
+
 ```
 
 ## Training data
@@ -39,15 +37,15 @@ require(readr)
 
 twitter_txt <- read_lines("en_US.twitter.txt")
 names(twitter_txt) <- paste0("tweet", 1:length(twitter_txt))
-twitter_df <- data_frame("text" = twitter_txt, id = 1:length(twitter_txt))
+twitter_df <- data_frame("text" = twitter_txt)
 
 news_txt <- read_lines("en_US.news.txt")
 names(news_txt) <- paste0("item", 1:length(news_txt))
-news_df <- data_frame("text" = news_txt, id = 1:length(news_txt))
+news_df <- data_frame("text" = news_txt)
 
 blogs_txt <- read_lines("en_US.blogs.txt")
 names(blogs_txt) <- paste0("post", 1:length(blogs_txt))
-blogs_df <- data_frame("text" = blogs_txt, id = 1:length(blogs_txt))
+blogs_df <- data_frame("text" = blogs_txt)
 
 
 format(object.size(twitter_df), units = "auto")
@@ -55,7 +53,8 @@ format(object.size(news_df), units = "auto")
 format(object.size(blogs_df), units = "auto")
 
 ```
-### Creating a corpus
+
+### Extracting samples
 
 Given the rather large files I will take 10 random entries from each source to explore.
 
@@ -63,13 +62,21 @@ Given the rather large files I will take 10 random entries from each source to e
 
 require(dplyr)
 
-twitter_sample <- sample_n(twitter_df, 100)
-news_sample <- sample_n(news_df, 100)
-blogs_sample <- sample_n(blogs_df, 100)
+dim(twitter_df)
+dim(news_df)
+dim(blogs_df)
+
+twitter_sample <- sample_frac(twitter_df, 0.01)
+news_sample <- sample_frac(news_df, 0.01)
+blogs_sample <- sample_frac(blogs_df, 0.01)
+
+dim(twitter_sample)
+dim(news_sample)
+dim(blogs_sample)
 
 ```
 
-## Extracting samples
+## Creating a corpus
 
 ```{r cache=TRUE}
 require(quanteda)
@@ -77,13 +84,16 @@ require(quanteda)
 ## Turning samples into collection data frame
 
 collection_sample <- bind_rows("twitter" = twitter_sample, "news" = news_sample, "blogs" = blogs_sample, .id = "source")
+colnames(collection_sample) <- c("source", "text")
 collection_sample$source <- factor(collection_sample$source)
+dim(collection_sample)
 
 # Set training sample
 
 training_data <- collection_sample
 
 # Creating a corpus
+
 training_corpus <- corpus(training_data)
 
 ```
@@ -103,7 +113,18 @@ Changing
 
 ```{r cache=TRUE}
 
+# QUANTEDA Tokenizing and preprocessing corpus
 
+system.time(collection_dfm <- dfm(training_corpus,
+                                  remove_numbers = TRUE,
+                                  remove_punct = TRUE,
+                                  remove_symbols = TRUE,
+                                  remove_separators = TRUE,
+                                  remove_twitter = TRUE,
+                                  remove_hyphens = TRUE,
+                                  remove_url = TRUE))
+
+clean_collection_df <- convert(collection_dfm, to = "data.frame")
 
 ```
 
@@ -114,83 +135,56 @@ For ngrams we calculate Maximum Likelihood Estimators by counting ngram frequenc
 
 ```{r cache=TRUE}
 
-## Tokenization
+require(tidytext)
 
-unigrams <- training_data %>% unnest_tokens(token, text)
-unigram_count <- unigrams %>% count(token, sort = TRUE)
-paste("Tokens in original data: ", count(unique(unigrams["token"])))
+# training_data <- clean_collection_df
 
-# Extract bigrams
+# TIDY Extract ngrams
 
-bigrams <- training_data %>% unnest_tokens(bigram, text, token = "ngrams", n = 2)
+print("Time to extract bigrams:")
+system.time(bigrams <- training_data %>% unnest_tokens(bigram, text, token = "ngrams", n = 2))
+str(bigrams)
+print("Time to extract trigrams:")
+system.time(trigrams <- training_data %>% unnest_tokens(trigram, text, token = "ngrams", n = 3))
+str(trigrams)
+print("Time to extract fourgrams:")
+system.time(fourgrams <- training_data %>% unnest_tokens(fourgram, text, token = "ngrams", n = 4))
+str(fourgrams)
 
-# Separate bigram words into columns for counting
+# TIDY Separate bigram words into columns for counting
 
-split_bigrams <- bigrams %>% separate(bigram, c("word1", "word2"), sep = " ")
-bigram_count <- split_bigrams %>% count(word1, word2, sort = TRUE)
+print("Time to split bigrams:")
+system.time(split_bigrams <- bigrams %>% separate(bigram, into = c("base", "prediction"), sep = " "))
+str(split_bigrams)
+print("Time to split trigrams:")
+system.time(split_trigrams <- trigrams %>% separate(trigram, into = c("base1", "base2", "prediction"), sep = " ") %>% unite(base1, base2, col = "base", sep = " "))
+str(split_trigrams)
+print("Time to split fourgrams:")
+system.time(split_fourgrams <- fourgrams %>% separate(fourgram, into = c("base1", "base2","base3", "prediction"), sep = " ") %>% unite(base1, base2, base3, col = "base", sep = " "))
+str(split_fourgrams)
+
 
 # Counting following words
 
-raw_bigram_count <- function(split_bigrams, unigram_count){
+require(data.table)
 
-  # Create raw bigram count data.table
-
-  count_mt <- matrix(0,
-                     ncol = length(unique(unigram_count$token)),
-                     nrow = length(unique(unigram_count$token)),
-                     dimnames = list(unique(unigram_count$token), unique(unigram_count$token)),
-                     byrow = TRUE)
+mle_calculator <- function(split_ngram) {
   
-  count_dt <- data.table(count_mt, keep.rownames = TRUE)
-  str(count_dt)
+  split_ngram <- data.table(split_ngram)
+  split_ngram[, .(prediction, norm = .N), by = .(base) # count base frequency to normalise
+              ][, .(norm, frequency = .N), by = .(base, prediction) # count ngram frequency
+                ][, .(base, prediction, norm, frequency, mle = frequency / norm)] # calculate MLE
   
-  # for each bigram
-  for(i in 1:nrow(split_bigrams)){
-    bigram <- split_bigrams[i, ]
-    word1 <- as.character(bigram["word1"])
-    word2 <- as.character(bigram["word2"])
-    print(paste("Bigram!", word1, word2))
-    # update count in table
-    old_count <- as.numeric(count_dt[rn == word1, word2, with = FALSE])
-    print(paste("Table content:", old_count))
-    new_count <- old_count + 1
-    count_dt[rn == word1, (word2) := (new_count)]
-    print(paste("New table content:", count_dt[rn == word1, word2, with = FALSE]))
-  }
-  return(count_dt) # a matrix with counts of features that follow features
 }
 
-raw_bi_count <- raw_bigram_count(split_bigrams, unigram_count)
-#microbenchmark(raw_bi_count <- raw_bigram_count(split_bigrams, unigram_count), times = 10)
+print("Time to calculate bigram MLEs:")
+system.time(bigram_mle <- mle_calculator(split_bigrams))
+print("Time to calculate trigram MLEs:")
+system.time(trigram_mle <- mle_calculator(split_trigrams))
+print("Time to calculate fourgram MLEs:")
+system.time(fourgram_mle <- mle_calculator(split_fourgrams))
 
 # Smoothing: add-one of count equals zero
-
-
-
-# Bigram model: calculate Maximul Likelihood Estimater of bigrams
-
-raw_bigram_probabilities <- function(raw_bi_count, unigram_count){
-  
-  # create probabilities data.table 
-  prob_dt <- melt(raw_bi_count)
-  str(prob_dt)
-  uni_dt <- data.table(unigram_count)
-  str(uni_dt)
-    
-  # for unigram; divide raw bigram count row by unigram count value
-  
-  for(i in 1:nrow(uni_dt)){
-      uni_token <- as.character(uni_dt[i, 1])
-      uni_count <- as.numeric(uni_dt[i, 2])
-      print(paste("Token: ", uni_token, ". Count: ", uni_count))
-      prob_dt[rn == (uni_token), value := value / uni_count, by = rn]
-  }
-  
-  prob_dt
-}
-
-raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count)
-#microbenchmark(raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count), times = 10)
 
 # n-grams that are aggregated into three columns, a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
 
@@ -204,33 +198,36 @@ raw_bi_probs <- raw_bigram_probabilities(raw_bi_count, unigram_count)
 
 # Lookup data.table per ngram consisting of three columns: a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
 
-bigram_probs <- function(raw_bigram_probabilities) {
+ngram_probs <- function(ngram_mle) {
+
+  unique(ngram_mle[, .(mle), by = .(base, prediction) # select relevant, unique rows
+             ][order(base, -mle)]) # order by mle
   
-  bi_probs <- raw_bigram_probabilities
-
-  setkey(bi_probs, rn)
-  bi_probs <- bi_probs[order(-value)]
-
-  bi_probs
 }
 
-bigram_lookup <- bigram_probs(raw_bi_probs)
+print("Time to create bigram lookup table:")
+system.time(bigram_lookup <- ngram_probs(bigram_mle))
+print("Time to create trigram lookup table:")
+system.time(trigram_lookup <- ngram_probs(trigram_mle))
+print("Time to create fourgram lookup table:")
+system.time(fourgram_lookup <- ngram_probs(fourgram_mle))
 
 # Lets save the lookup table as an rds file to send with Shiny App
 
-saveRDS(bigram_lookup, file = "WordPredictor/data/server_lookup.rds")
+ngram_lookup <- rbindlist(list(bigram_lookup, trigram_lookup, fourgram_lookup))
+saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
 
-## A lookup function: given a string, look up the most probable next word
+# A lookup function: given a string, look up the most probable next word
 
-# What ngam is the string?
-
-# Lookup ngram in data.table organised by ngram probability
-
-# If not found _back off_ to smaller ngram prediction
-
-predictWord <- function(string, bigram_lookup) {
+predictWord <- function(string, ngram_lookup) {
   
-  bigram_lookup[rn == string][1]$variable
+  # What ngam is the string?
+
+  # Lookup ngram in data.table organised by ngram probability
+
+  # If not found _back off_ to smaller ngram prediction
+  
+  ngram_lookup[base == string][1]$prediction
   
 }
 
@@ -239,6 +236,7 @@ predictWord <- function(string, bigram_lookup) {
 
 ## Ideas for improvement
 
+- Add keys to data.tables
 - Add background language model:
 <https://ai.googleblog.com/2006/08/all-our-n-gram-are-belong-to-you.html>
 <https://storage.googleapis.com/books/ngrams/books/datasetsv2.html>
