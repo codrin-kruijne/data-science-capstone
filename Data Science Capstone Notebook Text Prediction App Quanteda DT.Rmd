@@ -16,11 +16,15 @@ My aim was to get familiar with the [TidyText package](https://www.tidytextminin
 
 ```{r message=FALSE, warning=FALSE}
 
-require(tm)
 require(tidyr)
+require(dplyr)
 require(stringr)
+
 require(ggplot2)
 require(gridExtra)
+
+require(tm)
+
 require(microbenchmark)
 
 ```
@@ -60,15 +64,14 @@ Given the rather large files I will take 10 random entries from each source to e
 
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 
-require(dplyr)
-
 dim(twitter_df)
 dim(news_df)
 dim(blogs_df)
 
-twitter_sample <- sample_frac(twitter_df, 0.01)
-news_sample <- sample_frac(news_df, 0.01)
-blogs_sample <- sample_frac(blogs_df, 0.01)
+sample_size <- 0.1
+twitter_sample <- sample_frac(twitter_df, sample_size)
+news_sample <- sample_frac(news_df, sample_size)
+blogs_sample <- sample_frac(blogs_df, sample_size)
 
 dim(twitter_sample)
 dim(news_sample)
@@ -92,9 +95,12 @@ dim(collection_sample)
 
 training_data <- collection_sample
 
-# Creating a corpus
+# Creating corpi
 
-training_corpus <- corpus(training_data)
+twitter_corpus <- corpus(twitter_sample)
+news_corpus <- corpus(news_sample)
+blogs_corpus <- corpus(blogs_sample)
+training_corpus <- corpus(collection_sample)
 
 ```
 
@@ -113,18 +119,65 @@ Changing
 
 ```{r cache=TRUE}
 
-# QUANTEDA Tokenizing and preprocessing corpus
+# QUANTEDA Function for preprocessing corpus and tokenizing ngrams
 
-system.time(collection_dfm <- dfm(training_corpus,
-                                  remove_numbers = TRUE,
-                                  remove_punct = TRUE,
-                                  remove_symbols = TRUE,
-                                  remove_separators = TRUE,
-                                  remove_twitter = TRUE,
-                                  remove_hyphens = TRUE,
-                                  remove_url = TRUE))
+create_ngrams_dt <- function(q_corpus, n) {
 
-clean_collection_df <- convert(collection_dfm, to = "data.frame")
+  corpus_dfm <- dfm(q_corpus,
+                    tolower = TRUE,
+                    remove_numbers = TRUE,
+                    remove_punct = TRUE,
+                    remove_symbols = TRUE,
+                    remove_separators = TRUE,
+                    remove_twitter = TRUE,
+                    remove_hyphens = TRUE,
+                    remove_url = TRUE,
+                    ngrams = n,
+                    concatenator = " ",
+                    verbose = TRUE)
+  
+  dt <- data.table(ngrams = corpus_dfm@Dimnames$features)
+  
+}
+
+# QUANTEDA creating data.tables with all ngrams
+
+print("Time of preprocessing creating bigrams: Twitter")
+system.time(twitter_bigrams <- create_ngrams_dt(twitter_corpus, 2))
+print("Time of preprocessing creating trigrams: Twitter")
+system.time(twitter_trigrams <- create_ngrams_dt(twitter_corpus, 3))
+print("Time of preprocessing creating ourgrams: Twitter")
+system.time(twitter_fourgrams <- create_ngrams_dt(twitter_corpus, 4))
+
+print("Time of preprocessing creating bigrams: News")
+system.time(news_bigrams <- create_ngrams_dt(news_corpus, 2))
+print("Time of preprocessing creating trigrams: News")
+system.time(news_trigrams <- create_ngrams_dt(news_corpus, 3))
+print("Time of preprocessing creating fourgrams: News")
+system.time(news_fourgrams <- create_ngrams_dt(news_corpus, 4))
+
+print("Time of preprocessing creating bigrams: Blogs")
+system.time(blogs_bigrams <- create_ngrams_dt(blogs_corpus, 2))
+print("Time of preprocessing creating trigrams: Blogs")
+system.time(blogs_trigrams <- create_ngrams_dt(blogs_corpus, 3))
+print("Time of preprocessing creating fourgrams: Blogs")
+system.time(blogs_fourgrams <- create_ngrams_dt(blogs_corpus, 4))
+
+# Merging ngrams
+
+bigrams_dt <- rbindlist(list(twitter_bigrams, news_bigrams, blogs_bigrams))
+trigrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
+fourgrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
+  
+# QUANTEDA Mixed ngrams
+print("Time of preprocessing creating ngrams: Twitter")
+system.time(twitter_dt <- create_ngrams_dt(twitter_corpus))
+print("Time of preprocessing creating ngrams: News")
+system.time(news_dt <- create_ngrams_dt(news_corpus))
+print("Time of preprocessing creating ngrams: Blogs")
+system.time(blogs_dt <- create_ngrams_dt(blogs_corpus))
+print("Time to bind ngram data.tables: Collection")
+system.time(ngrams_dt <- rbindlist(list(twitter_dt, news_dt, blogs_dt)))
 
 ```
 
@@ -151,20 +204,58 @@ print("Time to extract fourgrams:")
 system.time(fourgrams <- training_data %>% unnest_tokens(fourgram, text, token = "ngrams", n = 4))
 str(fourgrams)
 
+# QUANTEDA Separate bigram words into columns for counting
+
+print("Time to split bigrams DT:")
+system.time(split_bigrams_dt <- bigrams_dt %>% separate(ngrams, into = c("base_bi", "prediction"), sep = " "))
+str(split_bigrams_dt)
+
+print("Time to split trigrams DT:")
+system.time(split_trigrams_dt <- trigrams_dt %>% separate(ngrams, into = c("base_tri",  "base_bi", "prediction"), sep = " "))
+str(split_bigrams_dt)
+
+print("Time to split fourgrams DT:")
+system.time(split_fourgrams_dt <- fourgrams_dt %>% separate(ngrams, into = c("base_four", "base_tri", "base_bi", "prediction"), sep = " "))
+str(split_fourgrams_dt)
+
+# QUANTEDA All at once
+
+print("Time to split Twitter DT:") 
+system.time(split_twitter_dt <- twitter_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
+str(split_twitter_dt)
+
+print("Time to split News DT:") 
+system.time(split_news_dt <- news_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
+str(split_news_dt)
+
+print("Time to split Blogs DT:") 
+system.time(split_blogs_dt <- blogs_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
+str(split_blogs_dt)
+
+print("Time to split Collection DT:") 
+system.time(split_ngrams_dt <- ngrams_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
+str(split_ngrams_dt)
+format(object.size(split_ngrams_dt), units = "auto")
+
 # TIDY Separate bigram words into columns for counting
 
 print("Time to split bigrams:")
 system.time(split_bigrams <- bigrams %>% separate(bigram, into = c("base", "prediction"), sep = " "))
 str(split_bigrams)
+
 print("Time to split trigrams:")
 system.time(split_trigrams <- trigrams %>% separate(trigram, into = c("base1", "base2", "prediction"), sep = " ") %>% unite(base1, base2, col = "base", sep = " "))
 str(split_trigrams)
+
 print("Time to split fourgrams:")
 system.time(split_fourgrams <- fourgrams %>% separate(fourgram, into = c("base1", "base2","base3", "prediction"), sep = " ") %>% unite(base1, base2, base3, col = "base", sep = " "))
 str(split_fourgrams)
 
+```
 
-# Counting following words
+```{r cache=TRUE}
+
+# Counting Maximum Likelihood Estimators
 
 require(data.table)
 
@@ -221,11 +312,7 @@ saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
 
 predictWord <- function(string, ngram_lookup) {
   
-  # What ngam is the string?
-
   # Lookup ngram in data.table organised by ngram probability
-
-  # If not found _back off_ to smaller ngram prediction
   
   ngram_lookup[base == string][1]$prediction
   
