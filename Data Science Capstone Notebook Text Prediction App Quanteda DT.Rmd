@@ -1,7 +1,7 @@
 ---
-title: "Data Science Capstone Milestone Report"
+title: "Data Science Capstone Report"
 author: "Codrin Kruijne"
-date: "12/05/2018"
+date: "10/06/2018"
 output:
   html_document:
     df_print: paged
@@ -40,21 +40,12 @@ Three files were provided with a selection of tweets, news items and blog entrie
 require(readr)
 
 twitter_txt <- read_lines("en_US.twitter.txt")
-names(twitter_txt) <- paste0("tweet", 1:length(twitter_txt))
-twitter_df <- data_frame("text" = twitter_txt)
-
 news_txt <- read_lines("en_US.news.txt")
-names(news_txt) <- paste0("item", 1:length(news_txt))
-news_df <- data_frame("text" = news_txt)
-
 blogs_txt <- read_lines("en_US.blogs.txt")
-names(blogs_txt) <- paste0("post", 1:length(blogs_txt))
-blogs_df <- data_frame("text" = blogs_txt)
 
-
-format(object.size(twitter_df), units = "auto")
-format(object.size(news_df), units = "auto")
-format(object.size(blogs_df), units = "auto")
+format(object.size(twitter_txt), units = "auto")
+format(object.size(news_txt), units = "auto")
+format(object.size(blogs_txt), units = "auto")
 
 ```
 
@@ -64,47 +55,43 @@ Given the rather large files I will take 10 random entries from each source to e
 
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 
-dim(twitter_df)
-dim(news_df)
-dim(blogs_df)
+print("Data rows: Twitter, News, Blogs")
+length(twitter_txt)
+length(news_txt)
+length(blogs_txt)
 
-sample_size <- 0.1
-twitter_sample <- sample_frac(twitter_df, sample_size)
-news_sample <- sample_frac(news_df, sample_size)
-blogs_sample <- sample_frac(blogs_df, sample_size)
+sample_frac <- 0.5
+twitter_sample <- sample(twitter_txt, sample_frac * length(twitter_txt))
+news_sample <- sample(news_txt, sample_frac * length(news_txt))
+blogs_sample <- sample(blogs_txt, sample_frac * length(blogs_txt))
 
-dim(twitter_sample)
-dim(news_sample)
-dim(blogs_sample)
+print("Sample rows: Twitter, News, Blogs")
+length(twitter_sample)
+length(news_sample)
+length(blogs_sample)
 
 ```
 
 ## Creating a corpus
 
 ```{r cache=TRUE}
+
 require(quanteda)
 
-## Turning samples into collection data frame
+# Creating corpi PARALLEL
 
-collection_sample <- bind_rows("twitter" = twitter_sample, "news" = news_sample, "blogs" = blogs_sample, .id = "source")
-colnames(collection_sample) <- c("source", "text")
-collection_sample$source <- factor(collection_sample$source)
-dim(collection_sample)
+cl1 <- makeCluster(3)
 
-# Set training sample
+print("Time to create corpi PARALLEL")
+system.time(corpus_list <- parLapply(cl1, list(twitter_sample, news_sample, blogs_sample), corpus))
 
-training_data <- collection_sample
+stopCluster(cl1)
 
-# Creating corpi
+# Extract results
 
-print("Time to create corpus: Twitter")
-system.time(twitter_corpus <- corpus(twitter_sample))
-print("Time to create corpus: News")
-system.time(news_corpus <- corpus(news_sample))
-print("Time to create corpus: Blogs")
-system.time(blogs_corpus <- corpus(blogs_sample))
-print("Time to create corpus: Collection")
-system.time(training_corpus <- corpus(collection_sample))
+twitter_corpus <- corpus_list[[1]]
+news_corpus <- corpus_list[[2]]
+blogs_corpus <- corpus_list[[3]]
 
 ```
 
@@ -112,14 +99,13 @@ system.time(training_corpus <- corpus(collection_sample))
 
 Removing:
 - Profanity filtering
-- Twitter text
-- links etc.
-- numbers
 - smileys
 - abbreviations
 
-Changing
+Changing:
 - word combinations to full: can't -> cannot
+
+Stemming?
 
 ```{r cache=TRUE}
 
@@ -130,17 +116,17 @@ require(data.table)
 create_ngrams_dt <- function(q_corpus_n) {
 
   corpus_dfm <- quanteda::dfm(q_corpus_n[[1]],
-                    tolower = TRUE,
-                    remove_numbers = TRUE,
-                    remove_punct = TRUE,
-                    remove_symbols = TRUE,
-                    remove_separators = TRUE,
-                    remove_twitter = TRUE,
-                    remove_hyphens = TRUE,
-                    remove_url = TRUE,
-                    ngrams = q_corpus_n[[2]],
-                    concatenator = " ",
-                    verbose = TRUE)
+                              tolower = TRUE,
+                              remove_numbers = TRUE,
+                              remove_punct = TRUE,
+                              remove_symbols = TRUE,
+                              remove_separators = TRUE,
+                              remove_twitter = TRUE,
+                              remove_hyphens = TRUE,
+                              remove_url = TRUE,
+                              ngrams = q_corpus_n[[2]],
+                              concatenator = " ",
+                              verbose = TRUE)
   
   dt <- data.table::data.table(ngrams = corpus_dfm@Dimnames$features)
   
@@ -148,104 +134,58 @@ create_ngrams_dt <- function(q_corpus_n) {
 
 # Parallel preprocessing and all ngam creation for all corpi
 
-cl <- makeCluster(10)
+cl2 <- makeCluster(12)
 
 parallel_list <- list(list(twitter_corpus, 2),
                       list(twitter_corpus, 3),
                       list(twitter_corpus, 4),
+                      list(twitter_corpus, 5),
                       list(news_corpus, 2),
                       list(news_corpus, 3),
                       list(news_corpus, 4),
+                      list(news_corpus, 5),
                       list(blogs_corpus, 2),
                       list(blogs_corpus, 3),
-                      list(blogs_corpus, 4))
-print("Time of preprocessing and creating all bigrams: Collection PARALLEL")
-system.time(collection_bigrams_dt <- parLapply(cl, parallel_list, create_ngrams_dt))
+                      list(blogs_corpus, 4),
+                      list(blogs_corpus, 5))
 
-stopCluster(cl)
+print("Time of preprocessing and creating all bigrams: Collection")
+system.time(collection_ngrams_list <- parLapply(cl2, parallel_list, create_ngrams_dt))
 
-# QUANTEDA Preprocessing and ngram creation from Twitter: DT
+stopCluster(cl2)
 
-print("Time of preprocessing creating bigrams: Twitter")
-system.time(twitter_bigrams <- create_ngrams_dt(twitter_corpus, 2))
-print("Time of preprocessing creating trigrams: Twitter")
-system.time(twitter_trigrams <- create_ngrams_dt(twitter_corpus, 3))
-print("Time of preprocessing creating ourgrams: Twitter")
-system.time(twitter_fourgrams <- create_ngrams_dt(twitter_corpus, 4))
+rm(parallel_list) # Free up memory
 
-# QUANTEDA Preprocessing and ngram creation from News: DT
+# Extracting parallell processing results
 
-print("Time of preprocessing creating bigrams: News")
-system.time(news_bigrams <- create_ngrams_dt(news_corpus, 2))
-print("Time of preprocessing creating trigrams: News")
-system.time(news_trigrams <- create_ngrams_dt(news_corpus, 3))
-print("Time of preprocessing creating fourgrams: News")
-system.time(news_fourgrams <- create_ngrams_dt(news_corpus, 4))
+twitter_bi_dt <- collection_ngrams_list[[1]]
+twitter_tri_dt <- collection_ngrams_list[[2]]
+twitter_four_dt <- collection_ngrams_list[[3]]
+twitter_five_dt <- collection_ngrams_list[[4]]
 
-# QUANTEDA Preprocessing and ngram creation from Blogs: DT
+news_bi_dt <- collection_ngrams_list[[5]]
+news_tri_dt <- collection_ngrams_list[[6]]
+news_four_dt <- collection_ngrams_list[[7]]
+news_five_dt <- collection_ngrams_list[[8]]
 
-print("Time of preprocessing creating bigrams: Blogs")
-system.time(blogs_bigrams <- create_ngrams_dt(blogs_corpus, 2))
-print("Time of preprocessing creating trigrams: Blogs")
-system.time(blogs_trigrams <- create_ngrams_dt(blogs_corpus, 3))
-print("Time of preprocessing creating fourgrams: Blogs")
-system.time(blogs_fourgrams <- create_ngrams_dt(blogs_corpus, 4))
+blogs_bi_dt <- collection_ngrams_list[[9]]
+blogs_tri_dt <- collection_ngrams_list[[10]]
+blogs_four_dt <- collection_ngrams_list[[11]]
+blogs_five_dt <- collection_ngrams_list[[12]]
 
-# QUANTEDA Preprocessing and ngram creation from Collection: DT
+# twitter_dt <- rbindlist(collection_ngrams_list[1:4])
+# news_dt <- rbindlist(collection_ngrams_list[5:8])
+# blogs_dt <- rbindlist(collection_ngrams_list[9:12])
 
-print("Time of preprocessing creating bigrams: Collection")
-system.time(collection_bigrams <- create_ngrams_dt(training_corpus, 2))
-print("Time of preprocessing creating trigrams: Collection")
-system.time(collection_trigrams <- create_ngrams_dt(training_corpus, 3))
-print("Time of preprocessing creating fourgrams: Collection")
-system.time(collection_fourgrams <- create_ngrams_dt(training_corpus, 4))
-
-# QUANTEDA All at once corpus
-
-all_ngrams_dt <- function(q_corpus) {
-
-  corpus_dfm <- quanteda::dfm(q_corpus,
-                    tolower = TRUE,
-                    remove_numbers = TRUE,
-                    remove_punct = TRUE,
-                    remove_symbols = TRUE,
-                    remove_separators = TRUE,
-                    remove_twitter = TRUE,
-                    remove_hyphens = TRUE,
-                    remove_url = TRUE,
-                    ngrams = 2:4,
-                    concatenator = " ",
-                    verbose = TRUE)
+bigrams_dt <- rbindlist(collection_ngrams_list[c(1, 5, 9)])
+trigrams_dt <- rbindlist(collection_ngrams_list[c(2, 6, 10)])
+fourgrams_dt <- rbindlist(collection_ngrams_list[c(3, 7, 11)])
+fivegrams_dt <- rbindlist(collection_ngrams_list[c(4, 8, 12)])
   
-  dt <- data.table::data.table(ngrams = corpus_dfm@Dimnames$features)
-  
-}
+# ngrams_dt <- rbindlist(collection_ngrams_list)
 
-print("Time of preprocessing and creating all ngrams: Collection")
-system.time(collection_ngrams <- all_ngrams_dt(training_corpus))
-
-# Trying parallel processing 2
-
-cl <- makeCluster(3)
-
-print("Time of preprocessing and creating all ngrams: Collection PARALLEL")
-system.time(collection_ngrams_dt <- parLapply(cl, list(twitter_corpus, news_corpus, blogs_corpus), all_ngrams_dt))
-
-stopCluster(cl)
-
-
-# Merging ngrams
-
-twitter_dt <- rbindlist(list(twitter_bigrams, twitter_trigrams, twitter_fourgrams))
-news_dt <- rbindlist(list(news_bigrams, news_trigrams, news_fourgrams))
-blogs_dt <- rbindlist(list(blogs_bigrams, blogs_trigrams, blogs_fourgrams))
-
-
-bigrams_dt <- rbindlist(list(twitter_bigrams, news_bigrams, blogs_bigrams))
-trigrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
-fourgrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
-  
-ngrams_dt <- rbindlist(list(bigrams_dt, trigrams_dt, fourgrams_dt))
+# Succesfull ngram creation? Clean up!
+rm(collection_ngrams_list)
 
 ```
 
@@ -258,66 +198,91 @@ For ngrams we calculate Maximum Likelihood Estimators by counting ngram frequenc
 
 require(tidytext)
 
-# training_data <- clean_collection_df
+# function for splitting and ngrams to base and prediction columns
+# that takes a list of an ngram_dt and a split list
 
-# TIDY Extract ngrams
+split_merge_dt <- function(ngram_split){
+  
+  # split to separate columns
+  result_dt <- tidyr::separate(ngram_split[[1]], ngrams, into = ngram_split[[2]], sep = " ")
+  
+  # unite trigram and fourgram bases
+  if(length(ngram_split[[2]]) == 3){
+    result_dt <- tidyr::unite(result_dt, base_tri, base_bi, col = "base", sep = " ")
+  }
+  else if(length(ngram_split[[2]]) == 4){
+    result_dt <- tidyr::unite(result_dt, base_four, base_tri, base_bi, col = "base", sep = " ")
+  }
+  else if(length(ngram_split[[2]]) == 5){
+    result_dt <- tidyr::unite(result_dt, base_five, base_four, base_tri, base_bi, col = "base", sep = " ")
+  }
+  result_dt
 
-print("Time to extract bigrams:")
-system.time(bigrams <- training_data %>% unnest_tokens(bigram, text, token = "ngrams", n = 2))
-str(bigrams)
-print("Time to extract trigrams:")
-system.time(trigrams <- training_data %>% unnest_tokens(trigram, text, token = "ngrams", n = 3))
-str(trigrams)
-print("Time to extract fourgrams:")
-system.time(fourgrams <- training_data %>% unnest_tokens(fourgram, text, token = "ngrams", n = 4))
-str(fourgrams)
+}
 
-# QUANTEDA Separate bigram words into columns for counting
+# Preparing parallel processing of splitting and merging
 
-print("Time to split bigrams DT:")
-system.time(split_bigrams_dt <- bigrams_dt %>% separate(ngrams, into = c("base_bi", "prediction"), sep = " "))
-str(split_bigrams_dt)
+cl3 <- makeCluster(12)
 
-print("Time to split trigrams DT:")
-system.time(split_trigrams_dt <- trigrams_dt %>% separate(ngrams, into = c("base_tri",  "base_bi", "prediction"), sep = " "))
-str(split_bigrams_dt)
+# create a list of split options for each ngram
+split_list <- list(c("base", "prediction"),
+                   c("base_tri",  "base_bi", "prediction"),
+                   c("base_four", "base_tri", "base_bi", "prediction"),
+                   c("base_five", "base_four", "base_tri", "base_bi", "prediction"))
 
-print("Time to split fourgrams DT:")
-system.time(split_fourgrams_dt <- fourgrams_dt %>% separate(ngrams, into = c("base_four", "base_tri", "base_bi", "prediction"), sep = " "))
-str(split_fourgrams_dt)
+# create a list of lists: each with a ngram dt and a split list
+parallel_list2 <- list(list(twitter_bi_dt, split_list[[1]]),
+                      list(twitter_tri_dt, split_list[[2]]),
+                      list(twitter_four_dt, split_list[[3]]),
+                      list(twitter_five_dt, split_list[[4]]),
+                      list(news_bi_dt, split_list[[1]]),
+                      list(news_tri_dt, split_list[[2]]),
+                      list(news_four_dt, split_list[[3]]),
+                      list(news_five_dt, split_list[[4]]),
+                      list(blogs_bi_dt, split_list[[1]]),
+                      list(blogs_tri_dt, split_list[[2]]),
+                      list(blogs_four_dt, split_list[[3]]),
+                      list(blogs_five_dt, split_list[[4]]))
 
-# QUANTEDA All at once
+print("Time of splitting and merging words: Collection")
+system.time(collection_base_pred_list <- parLapply(cl3, parallel_list2, split_merge_dt))
 
-print("Time to split Twitter DT:") 
-system.time(split_twitter_dt <- twitter_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
-str(split_twitter_dt)
+stopCluster(cl3)
 
-print("Time to split News DT:") 
-system.time(split_news_dt <- news_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
-str(split_news_dt)
+# Extracting parallell processing results
 
-print("Time to split Blogs DT:") 
-system.time(split_blogs_dt <- blogs_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
-str(split_blogs_dt)
+# twitter_split_bi_dt <- collection_base_pred_list[[1]]
+# twitter_split_tri_dt <- collection_base_pred_list[[2]]
+# twitter_split_four_dt <- collection_base_pred_list[[3]]
+# twitter_split_five_dt <- collection_base_pred_list[[4]]
+# 
+# news_split_bi_dt <- collection_base_pred_list[[5]]
+# news_split_tri_dt <- collection_base_pred_list[[6]]
+# news_split_four_dt <- collection_base_pred_list[[7]]
+# news_split_five_dt <- collection_base_pred_list[[8]]
+# 
+# blogs_split_bi_dt <- collection_base_pred_list[[9]]
+# blogs_split_tri_dt <- collection_base_pred_list[[10]]
+# blogs_split_four_dt <- collection_base_pred_list[[11]]
+# blogs_split_five_dt <- collection_base_pred_list[[12]]
 
-print("Time to split Collection DT:") 
-system.time(split_ngrams_dt <- ngrams_dt %>% separate(ngrams, into = c("base_four", "base_tri","base_bi", "prediction"), sep = " ", fill = "left"))
-str(split_ngrams_dt)
-format(object.size(split_ngrams_dt), units = "auto")
+# twitter_split_dt <- rbindlist(collection_base_pred_list[1:4])
+# news_split_dt <- rbindlist(collection_base_pred_list[5:8])
+# blogs_split_dt <- rbindlist(collection_base_pred_list[9:12])
 
-# TIDY Separate bigram words into columns for counting
+split_bigrams_dt <- rbindlist(collection_base_pred_list[c(1, 5, 9)])
+split_trigrams_dt <- rbindlist(collection_base_pred_list[c(2, 6, 10)])
+split_fourgrams_dt <- rbindlist(collection_base_pred_list[c(3, 7, 11)])
+split_fivegrams_dt <- rbindlist(collection_base_pred_list[c(4, 8, 12)])
+  
+# split_ngrams_dt <- rbindlist(collection_base_pred_list)
 
-print("Time to split bigrams:")
-system.time(split_bigrams <- bigrams %>% separate(bigram, into = c("base", "prediction"), sep = " "))
-str(split_bigrams)
-
-print("Time to split trigrams:")
-system.time(split_trigrams <- trigrams %>% separate(trigram, into = c("base1", "base2", "prediction"), sep = " ") %>% unite(base1, base2, col = "base", sep = " "))
-str(split_trigrams)
-
-print("Time to split fourgrams:")
-system.time(split_fourgrams <- fourgrams %>% separate(fourgram, into = c("base1", "base2","base3", "prediction"), sep = " ") %>% unite(base1, base2, base3, col = "base", sep = " "))
-str(split_fourgrams)
+# Succesful base-prediction splitting? Clean up!
+rm(parallel_list2)
+rm(collection_base_pred_list)
+rm(bigrams_dt)
+rm(trigrams_dt)
+rm(fourgrams_dt)
 
 ```
 
@@ -327,19 +292,43 @@ str(split_fourgrams)
 
 mle_calculator <- function(split_ngram) {
   
-  split_ngram <- data.table(split_ngram)
+  split_ngram <- data.table::data.table(split_ngram)
   split_ngram[, .(prediction, norm = .N), by = .(base) # count base frequency to normalise
               ][, .(norm, frequency = .N), by = .(base, prediction) # count ngram frequency
                 ][, .(base, prediction, norm, frequency, mle = frequency / norm)] # calculate MLE
   
 }
 
-print("Time to calculate bigram MLEs:")
-system.time(bigram_mle <- mle_calculator(split_bigrams))
-print("Time to calculate trigram MLEs:")
-system.time(trigram_mle <- mle_calculator(split_trigrams))
-print("Time to calculate fourgram MLEs:")
-system.time(fourgram_mle <- mle_calculator(split_fourgrams))
+# MLE calculation PARALLEL
+
+# cl4 <- makeCluster(4)
+# 
+# print("Time to calculate MLEs PARALLEL")
+# system.time(mle_list <- parLapply(cl4,
+#                                   list(split_bigrams_dt,
+#                                        split_trigrams_dt,
+#                                        split_fourgrams_dt),
+#                                   mle_calculator))
+# 
+# stopCluster(cl4)
+# 
+# bigram_mle <- mle_list[[1]]
+# trigram_mle <- mle_list[[2]]
+# fourgram_mle <- mle_list[[3]]
+
+# Basic MLE calculation SEEMS FASTER?!
+
+system.time(bigram_mle <- mle_calculator(split_bigrams_dt))
+system.time(trigram_mle <- mle_calculator(split_trigrams_dt))
+system.time(fourgram_mle <- mle_calculator(split_fourgrams_dt))
+system.time(fivegram_mle <- mle_calculator(split_fivegrams_dt))
+
+# Succesful MLE calculation? Clean up!
+# rm(mle_list)
+rm(split_bigrams_dt)
+rm(split_trigrams_dt)
+rm(split_fourgrams_dt)
+rm(split_fivegrams_dt)
 
 # Smoothing: add-one of count equals zero
 
@@ -357,22 +346,49 @@ system.time(fourgram_mle <- mle_calculator(split_fourgrams))
 
 ngram_probs <- function(ngram_mle) {
 
-  unique(ngram_mle[, .(mle), by = .(base, prediction) # select relevant, unique rows
+  dt <- data.table::data.table(ngram_mle)
+  unique(dt[, .(mle), by = .(base, prediction) # select relevant, unique rows
              ][order(base, -mle)]) # order by mle
   
 }
 
-print("Time to create bigram lookup table:")
+# Lookup table creation PARALLEL
+
+# cl5 <- makeCluster(4)
+# 
+# print("Time to create lookup tables PARALLEL")
+# system.time(lookup_list <- parLapply(cl5,
+#                                      list(bigram_mle,
+#                                           trigram_mle,
+#                                           fourgram_mle,
+#                                           fivegram_mle),
+#                                      ngram_probs))
+# 
+# stopCluster(cl5)
+# 
+# 
+# bigram_lookup <- lookup_list[[1]]
+# trigram_lookup <- lookup_list[[2]] 
+# fourgram_lookup <- lookup_list[[3]]
+# fivegram_lookup <- lookup_list[[4]]
+
+# Basic lookup table creation SEEMS FASTER?!
+
 system.time(bigram_lookup <- ngram_probs(bigram_mle))
-print("Time to create trigram lookup table:")
 system.time(trigram_lookup <- ngram_probs(trigram_mle))
-print("Time to create fourgram lookup table:")
 system.time(fourgram_lookup <- ngram_probs(fourgram_mle))
+system.time(fivegram_lookup <- ngram_probs(fivegram_mle))
 
 # Lets save the lookup table as an rds file to send with Shiny App
 
-ngram_lookup <- rbindlist(list(bigram_lookup, trigram_lookup, fourgram_lookup))
+ngram_lookup <- rbindlist(list(bigram_lookup, trigram_lookup, fourgram_lookup, fivegram_lookup))
 saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
+
+# Succesfull ngram lookup? Clean up!
+# rm(lookup_list)
+rm(bigram_lookup)
+rm(trigram_lookup)
+rm(fourgram_lookup)
 
 # A lookup function: given a string, look up the most probable next word
 
