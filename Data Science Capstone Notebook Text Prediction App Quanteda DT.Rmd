@@ -26,7 +26,7 @@ require(gridExtra)
 require(tm)
 
 require(microbenchmark)
-
+require(parallel)
 ```
 
 ## Training data
@@ -97,10 +97,14 @@ training_data <- collection_sample
 
 # Creating corpi
 
-twitter_corpus <- corpus(twitter_sample)
-news_corpus <- corpus(news_sample)
-blogs_corpus <- corpus(blogs_sample)
-training_corpus <- corpus(collection_sample)
+print("Time to create corpus: Twitter")
+system.time(twitter_corpus <- corpus(twitter_sample))
+print("Time to create corpus: News")
+system.time(news_corpus <- corpus(news_sample))
+print("Time to create corpus: Blogs")
+system.time(blogs_corpus <- corpus(blogs_sample))
+print("Time to create corpus: Collection")
+system.time(training_corpus <- corpus(collection_sample))
 
 ```
 
@@ -121,9 +125,11 @@ Changing
 
 # QUANTEDA Function for preprocessing corpus and tokenizing ngrams
 
-create_ngrams_dt <- function(q_corpus, n) {
+require(data.table)
 
-  corpus_dfm <- dfm(q_corpus,
+create_ngrams_dt <- function(q_corpus_n) {
+
+  corpus_dfm <- quanteda::dfm(q_corpus_n[[1]],
                     tolower = TRUE,
                     remove_numbers = TRUE,
                     remove_punct = TRUE,
@@ -132,15 +138,33 @@ create_ngrams_dt <- function(q_corpus, n) {
                     remove_twitter = TRUE,
                     remove_hyphens = TRUE,
                     remove_url = TRUE,
-                    ngrams = n,
+                    ngrams = q_corpus_n[[2]],
                     concatenator = " ",
                     verbose = TRUE)
   
-  dt <- data.table(ngrams = corpus_dfm@Dimnames$features)
+  dt <- data.table::data.table(ngrams = corpus_dfm@Dimnames$features)
   
 }
 
-# QUANTEDA creating data.tables with all ngrams
+# Parallel preprocessing and all ngam creation for all corpi
+
+cl <- makeCluster(10)
+
+parallel_list <- list(list(twitter_corpus, 2),
+                      list(twitter_corpus, 3),
+                      list(twitter_corpus, 4),
+                      list(news_corpus, 2),
+                      list(news_corpus, 3),
+                      list(news_corpus, 4),
+                      list(blogs_corpus, 2),
+                      list(blogs_corpus, 3),
+                      list(blogs_corpus, 4))
+print("Time of preprocessing and creating all bigrams: Collection PARALLEL")
+system.time(collection_bigrams_dt <- parLapply(cl, parallel_list, create_ngrams_dt))
+
+stopCluster(cl)
+
+# QUANTEDA Preprocessing and ngram creation from Twitter: DT
 
 print("Time of preprocessing creating bigrams: Twitter")
 system.time(twitter_bigrams <- create_ngrams_dt(twitter_corpus, 2))
@@ -149,12 +173,16 @@ system.time(twitter_trigrams <- create_ngrams_dt(twitter_corpus, 3))
 print("Time of preprocessing creating ourgrams: Twitter")
 system.time(twitter_fourgrams <- create_ngrams_dt(twitter_corpus, 4))
 
+# QUANTEDA Preprocessing and ngram creation from News: DT
+
 print("Time of preprocessing creating bigrams: News")
 system.time(news_bigrams <- create_ngrams_dt(news_corpus, 2))
 print("Time of preprocessing creating trigrams: News")
 system.time(news_trigrams <- create_ngrams_dt(news_corpus, 3))
 print("Time of preprocessing creating fourgrams: News")
 system.time(news_fourgrams <- create_ngrams_dt(news_corpus, 4))
+
+# QUANTEDA Preprocessing and ngram creation from Blogs: DT
 
 print("Time of preprocessing creating bigrams: Blogs")
 system.time(blogs_bigrams <- create_ngrams_dt(blogs_corpus, 2))
@@ -163,21 +191,61 @@ system.time(blogs_trigrams <- create_ngrams_dt(blogs_corpus, 3))
 print("Time of preprocessing creating fourgrams: Blogs")
 system.time(blogs_fourgrams <- create_ngrams_dt(blogs_corpus, 4))
 
+# QUANTEDA Preprocessing and ngram creation from Collection: DT
+
+print("Time of preprocessing creating bigrams: Collection")
+system.time(collection_bigrams <- create_ngrams_dt(training_corpus, 2))
+print("Time of preprocessing creating trigrams: Collection")
+system.time(collection_trigrams <- create_ngrams_dt(training_corpus, 3))
+print("Time of preprocessing creating fourgrams: Collection")
+system.time(collection_fourgrams <- create_ngrams_dt(training_corpus, 4))
+
+# QUANTEDA All at once corpus
+
+all_ngrams_dt <- function(q_corpus) {
+
+  corpus_dfm <- quanteda::dfm(q_corpus,
+                    tolower = TRUE,
+                    remove_numbers = TRUE,
+                    remove_punct = TRUE,
+                    remove_symbols = TRUE,
+                    remove_separators = TRUE,
+                    remove_twitter = TRUE,
+                    remove_hyphens = TRUE,
+                    remove_url = TRUE,
+                    ngrams = 2:4,
+                    concatenator = " ",
+                    verbose = TRUE)
+  
+  dt <- data.table::data.table(ngrams = corpus_dfm@Dimnames$features)
+  
+}
+
+print("Time of preprocessing and creating all ngrams: Collection")
+system.time(collection_ngrams <- all_ngrams_dt(training_corpus))
+
+# Trying parallel processing 2
+
+cl <- makeCluster(3)
+
+print("Time of preprocessing and creating all ngrams: Collection PARALLEL")
+system.time(collection_ngrams_dt <- parLapply(cl, list(twitter_corpus, news_corpus, blogs_corpus), all_ngrams_dt))
+
+stopCluster(cl)
+
+
 # Merging ngrams
+
+twitter_dt <- rbindlist(list(twitter_bigrams, twitter_trigrams, twitter_fourgrams))
+news_dt <- rbindlist(list(news_bigrams, news_trigrams, news_fourgrams))
+blogs_dt <- rbindlist(list(blogs_bigrams, blogs_trigrams, blogs_fourgrams))
+
 
 bigrams_dt <- rbindlist(list(twitter_bigrams, news_bigrams, blogs_bigrams))
 trigrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
 fourgrams_dt <- rbindlist(list(twitter_trigrams, news_trigrams, blogs_trigrams))
   
-# QUANTEDA Mixed ngrams
-print("Time of preprocessing creating ngrams: Twitter")
-system.time(twitter_dt <- create_ngrams_dt(twitter_corpus))
-print("Time of preprocessing creating ngrams: News")
-system.time(news_dt <- create_ngrams_dt(news_corpus))
-print("Time of preprocessing creating ngrams: Blogs")
-system.time(blogs_dt <- create_ngrams_dt(blogs_corpus))
-print("Time to bind ngram data.tables: Collection")
-system.time(ngrams_dt <- rbindlist(list(twitter_dt, news_dt, blogs_dt)))
+ngrams_dt <- rbindlist(list(bigrams_dt, trigrams_dt, fourgrams_dt))
 
 ```
 
@@ -256,8 +324,6 @@ str(split_fourgrams)
 ```{r cache=TRUE}
 
 # Counting Maximum Likelihood Estimators
-
-require(data.table)
 
 mle_calculator <- function(split_ngram) {
   
