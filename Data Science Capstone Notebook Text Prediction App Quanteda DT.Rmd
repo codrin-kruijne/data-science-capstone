@@ -7,45 +7,54 @@ output:
     df_print: paged
 ---
 
-## Capstone project
+## Coursera Datat Science Specialization Capstone project
 
-The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for the possible following word while typing.
+The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for a number of typed words.
 
 ###  Technologies used
-My aim was to get familiar with the [TidyText package](https://www.tidytextmining.com/index.html) for text mining that works well with other tidy packages for R. 
+
+I have explored the use of the TM and TidyText packages. Hoowever, I settled on the combination below for performance and simplicity reasons. Please note the code has been written for making a language model and web app work in this education context. For more elaborate NLP it may seem succinct.
 
 ```{r message=FALSE, warning=FALSE}
 
-require(tidyr)
+require(readr) # for reading in text to build model on
+
+require(tidyr) # for table and string manipulation
 require(dplyr)
 require(stringr)
 
-require(ggplot2)
+require(ggplot2) # for plotting text features
 require(gridExtra)
 
-require(tm)
+require(microbenchmark) # for comparing function performance
+require(parallel) # for parallel processing
 
-require(microbenchmark)
-require(parallel)
+require(quanteda) # for text tokenization
+quanteda_options(threads = 10) # using parallell processing; adjust for available CPU!
+
+require(data.table) # for fast table calculation and lookup
+
 ```
 
 ## Training data
 
-Three files were provided with a selection of tweets, news items and blog entries that were obtained by web crawling.
+Three files were provided with a selection of tweets, news items and blog entries.
 
-### Obtaining data
+### Reading data
 
 ```{r cache=TRUE}
 
-require(readr)
+twitter_txt <- read_lines("en_US.twitter.txt") # read in tweets
+news_txt <- read_lines("en_US.news.txt") # read in news items
+blogs_txt <- read_lines("en_US.blogs.txt") # read in blog entries
+ 
+collection_txt <- c(twitter_txt, news_txt, blogs_txt) # combine into one collection
+rm(list = c("twitter_txt", "news_txt", "blogs_txt")) # remove separate source objects
 
-twitter_txt <- read_lines("en_US.twitter.txt")
-news_txt <- read_lines("en_US.news.txt")
-blogs_txt <- read_lines("en_US.blogs.txt")
-
-format(object.size(twitter_txt), units = "auto")
-format(object.size(news_txt), units = "auto")
-format(object.size(blogs_txt), units = "auto")
+print("Size of character vector with all collection elements:")
+format(object.size(collection_txt), units = "auto")
+print("NUmber of character elements:")
+length(collection_txt)
 
 ```
 
@@ -55,52 +64,32 @@ Given the rather large files I will take 10 random entries from each source to e
 
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 
-print("Data rows: Twitter, News, Blogs")
-length(twitter_txt)
-length(news_txt)
-length(blogs_txt)
+# Creating training set, hold out set and testing set
 
-sample_frac <- 0.5
-twitter_sample <- sample(twitter_txt, sample_frac * length(twitter_txt))
-news_sample <- sample(news_txt, sample_frac * length(news_txt))
-blogs_sample <- sample(blogs_txt, sample_frac * length(blogs_txt))
+train_frac <- 0.8 # Percentage of training set
+all_ind <- 1: length(collection_txt) # creating all indecis
+train_ind <- sample(all_ind, size = train_frac * length(all_ind)) # training indeces
+rest_ind <- all_ind[-train_ind] # remaining indeces to be separated
+hold_ind <- sample(rest_ind, size = 0.5 * length(rest_ind)) # half hold out set
+test_ind <- all_ind[-c(train_ind, hold_ind)] # hals test set
 
-print("Sample rows: Twitter, News, Blogs")
-length(twitter_sample)
-length(news_sample)
-length(blogs_sample)
+train <- collection_txt[train_ind] # create training set
+hold <- collection_txt[hold_ind] # create hold out set
+test <- collection_txt[test_ind] # create testing set
 
-```
-
-## Creating a corpus
-
-```{r cache=TRUE}
-
-require(quanteda)
-
-# Creating corpi PARALLEL
-
-cl1 <- makeCluster(3)
-
-print("Time to create corpi PARALLEL")
-system.time(corpus_list <- parLapply(cl1, list(twitter_sample, news_sample, blogs_sample), corpus))
-
-stopCluster(cl1)
-
-# Extract results
-
-twitter_corpus <- corpus_list[[1]]
-news_corpus <- corpus_list[[2]]
-blogs_corpus <- corpus_list[[3]]
+print(paste("Training set elements: ", length(train)))
+print(paste("Hold out set elements: ", length(hold)))
+print(paste("Training set elements: ", length(test)))
 
 ```
 
-### Preprocessing
+## Preprocessing: cleaning and tokenization
+
+TODO
 
 Removing:
 - Profanity filtering
-- smileys
-- abbreviations
+- measurements
 
 Changing:
 - word combinations to full: can't -> cannot
@@ -109,240 +98,312 @@ Stemming?
 
 ```{r cache=TRUE}
 
-# QUANTEDA Function for preprocessing corpus and tokenizing ngrams
+# Using Quanteda function combining preprocess operations
 
-require(data.table)
+# firs we tokenize to sentences, so that later bigrams are not created across sentences
+to_sentences <- function(sample) {
+  unlist(tokens(char_tolower(sample), what = "sentence", verbose = TRUE))
+}
 
-create_ngrams_dt <- function(q_corpus_n) {
+# Extract sentences
+print("Time to extract sentences out of training set:")
+system.time(train_sentences <- to_sentences(train))
+print("Time to extract sentences out of set:")
+system.time(hold_sentences <- to_sentences(hold))
 
-  corpus_dfm <- quanteda::dfm(q_corpus_n[[1]],
-                              tolower = TRUE,
-                              remove_numbers = TRUE,
-                              remove_punct = TRUE,
-                              remove_symbols = TRUE,
-                              remove_separators = TRUE,
-                              remove_twitter = TRUE,
-                              remove_hyphens = TRUE,
-                              remove_url = TRUE,
-                              ngrams = q_corpus_n[[2]],
-                              concatenator = " ",
-                              verbose = TRUE)
+# A function to preprocess and tokenize to words
+
+preprocess <- function(sample) {
   
-  dt <- data.table::data.table(ngrams = corpus_dfm@Dimnames$features)
+  toks <- tokens(sample, # all lowercases
+                 what = "word", # tokenize to words
+                 remove_numbers = TRUE, # remove numbers
+                 remove_punct = TRUE, # remove (unicode) punctuation
+                 remove_symbols = TRUE, # remove (unicode) symbols
+                 remove_separators = TRUE, # remove (unicode) separators 
+                 remove_twitter = TRUE, # remove Twitter like @ and #
+                 remove_hyphens = TRUE, # remove hyphens
+                 remove_url = TRUE, # remove URLs
+                 verbose = TRUE)
+  
+  # Additional manual preprocessing
+  
+  toks <- tokens_remove(toks, 
+                        case_insensitive = TRUE,
+                        c("(<U\\+\\w{4}>)+", # remove unicode tags
+                          "RT", # remove retweet abbreviation
+                          "DM", # remove direct message abbreviation
+                          "\\$\\d", # remove dollar amounts
+                          "[\\;\\:]\\'\\-+[\\(\\)pPD\\\\\\/\\|]", # remove smileys
+                          "\\<3", # remove 'love'
+                          "a\\.m\\.", # remove time abbreviations
+                          "p\\.m\\.",
+                          "\\d+\\:\\d+",
+                          "[:digit:]{1,2}[ap]m",
+                          "(.)\\1{3,}"), # remove any character that is repeated four or more times
+                        valuetype = "regex",
+                        verbose = TRUE)
+
+  toks # return cleaned tokens
   
 }
 
-# Parallel preprocessing and all ngam creation for all corpi
+# Clean and tokenize datasets in same way
+print("Time to preprocess training set:")
+train_tokens <- preprocess(train_sentences)
+print("Time to preprocess hold out set:")
+hold_tokens <- preprocess(hold_sentences)
+print("Time to preprocess testing set:")
+test_tokens <- preprocess(test_sentences)
 
-cl2 <- makeCluster(12)
-
-parallel_list <- list(list(twitter_corpus, 2),
-                      list(twitter_corpus, 3),
-                      list(twitter_corpus, 4),
-                      list(twitter_corpus, 5),
-                      list(news_corpus, 2),
-                      list(news_corpus, 3),
-                      list(news_corpus, 4),
-                      list(news_corpus, 5),
-                      list(blogs_corpus, 2),
-                      list(blogs_corpus, 3),
-                      list(blogs_corpus, 4),
-                      list(blogs_corpus, 5))
-
-print("Time of preprocessing and creating all bigrams: Collection")
-system.time(collection_ngrams_list <- parLapply(cl2, parallel_list, create_ngrams_dt))
-
-stopCluster(cl2)
-
-rm(parallel_list) # Free up memory
-
-# Extracting parallell processing results
-
-twitter_bi_dt <- collection_ngrams_list[[1]]
-twitter_tri_dt <- collection_ngrams_list[[2]]
-twitter_four_dt <- collection_ngrams_list[[3]]
-twitter_five_dt <- collection_ngrams_list[[4]]
-
-news_bi_dt <- collection_ngrams_list[[5]]
-news_tri_dt <- collection_ngrams_list[[6]]
-news_four_dt <- collection_ngrams_list[[7]]
-news_five_dt <- collection_ngrams_list[[8]]
-
-blogs_bi_dt <- collection_ngrams_list[[9]]
-blogs_tri_dt <- collection_ngrams_list[[10]]
-blogs_four_dt <- collection_ngrams_list[[11]]
-blogs_five_dt <- collection_ngrams_list[[12]]
-
-# twitter_dt <- rbindlist(collection_ngrams_list[1:4])
-# news_dt <- rbindlist(collection_ngrams_list[5:8])
-# blogs_dt <- rbindlist(collection_ngrams_list[9:12])
-
-bigrams_dt <- rbindlist(collection_ngrams_list[c(1, 5, 9)])
-trigrams_dt <- rbindlist(collection_ngrams_list[c(2, 6, 10)])
-fourgrams_dt <- rbindlist(collection_ngrams_list[c(3, 7, 11)])
-fivegrams_dt <- rbindlist(collection_ngrams_list[c(4, 8, 12)])
-  
-# ngrams_dt <- rbindlist(collection_ngrams_list)
-
-# Succesfull ngram creation? Clean up!
-rm(collection_ngrams_list)
+# Clean up
+rm(train)
+rm(hold)
+rm(test)
 
 ```
 
+## Ngram language modeling
 
-## Language modeling
-
-For ngrams we calculate Maximum Likelihood Estimators by counting ngram frequency of folling word, divided by count of that word.
+We did language modeling with ngrams. Bi-/tri-/four-/fivegrams were extracted. N-gram relative frequencies were obtained by calculating the frequency of the ngram divided by the count of the base. 
 
 ```{r cache=TRUE}
 
-require(tidytext)
+# Extracting ngrams for training. This code seems somewhat unelegantly repetivite, but it allows for flexible changes and avoids memory problems related to using lists and lapply e.g. We use Quanteda functions below which can make use of 10 threads (on my mahcine!)
 
-# function for splitting and ngrams to base and prediction columns
-# that takes a list of an ngram_dt and a split list
 
-split_merge_dt <- function(ngram_split){
-  
-  # split to separate columns
-  result_dt <- tidyr::separate(ngram_split[[1]], ngrams, into = ngram_split[[2]], sep = " ")
-  
-  # unite trigram and fourgram bases
-  if(length(ngram_split[[2]]) == 3){
-    result_dt <- tidyr::unite(result_dt, base_tri, base_bi, col = "base", sep = " ")
-  }
-  else if(length(ngram_split[[2]]) == 4){
-    result_dt <- tidyr::unite(result_dt, base_four, base_tri, base_bi, col = "base", sep = " ")
-  }
-  else if(length(ngram_split[[2]]) == 5){
-    result_dt <- tidyr::unite(result_dt, base_five, base_four, base_tri, base_bi, col = "base", sep = " ")
-  }
-  result_dt
+# Extracting bigrams
 
-}
+print("Time to create bigrams from training tokens")
+system.time(train_bigram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 2, concatenator = " "))))
+str(train_bigram_dt)
 
-# Preparing parallel processing of splitting and merging
+# Extracting trigrams
 
-cl3 <- makeCluster(12)
+print("Time to create trigrams from training tokens")
+system.time(train_trigram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 3, concatenator = " "))))
+str(train_trigram_dt)
 
-# create a list of split options for each ngram
-split_list <- list(c("base", "prediction"),
-                   c("base_tri",  "base_bi", "prediction"),
-                   c("base_four", "base_tri", "base_bi", "prediction"),
-                   c("base_five", "base_four", "base_tri", "base_bi", "prediction"))
-
-# create a list of lists: each with a ngram dt and a split list
-parallel_list2 <- list(list(twitter_bi_dt, split_list[[1]]),
-                      list(twitter_tri_dt, split_list[[2]]),
-                      list(twitter_four_dt, split_list[[3]]),
-                      list(twitter_five_dt, split_list[[4]]),
-                      list(news_bi_dt, split_list[[1]]),
-                      list(news_tri_dt, split_list[[2]]),
-                      list(news_four_dt, split_list[[3]]),
-                      list(news_five_dt, split_list[[4]]),
-                      list(blogs_bi_dt, split_list[[1]]),
-                      list(blogs_tri_dt, split_list[[2]]),
-                      list(blogs_four_dt, split_list[[3]]),
-                      list(blogs_five_dt, split_list[[4]]))
-
-print("Time of splitting and merging words: Collection")
-system.time(collection_base_pred_list <- parLapply(cl3, parallel_list2, split_merge_dt))
-
-stopCluster(cl3)
-
-# Extracting parallell processing results
-
-# twitter_split_bi_dt <- collection_base_pred_list[[1]]
-# twitter_split_tri_dt <- collection_base_pred_list[[2]]
-# twitter_split_four_dt <- collection_base_pred_list[[3]]
-# twitter_split_five_dt <- collection_base_pred_list[[4]]
+# # Extracting fourgrams
 # 
-# news_split_bi_dt <- collection_base_pred_list[[5]]
-# news_split_tri_dt <- collection_base_pred_list[[6]]
-# news_split_four_dt <- collection_base_pred_list[[7]]
-# news_split_five_dt <- collection_base_pred_list[[8]]
+# print("Time to create fourgrams from training tokens")
+# system.time(train_fourgram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 4, concatenator = " "))))
+# str(train_fourgram_dt)
 # 
-# blogs_split_bi_dt <- collection_base_pred_list[[9]]
-# blogs_split_tri_dt <- collection_base_pred_list[[10]]
-# blogs_split_four_dt <- collection_base_pred_list[[11]]
-# blogs_split_five_dt <- collection_base_pred_list[[12]]
+# # Extracting fivegrams
+# 
+# print("Time to create fivegrams from training tokens")
+# system.time(train_fivegram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 5, concatenator = " "))))
+# str(train_trigram_dt)
 
-# twitter_split_dt <- rbindlist(collection_base_pred_list[1:4])
-# news_split_dt <- rbindlist(collection_base_pred_list[5:8])
-# blogs_split_dt <- rbindlist(collection_base_pred_list[9:12])
-
-split_bigrams_dt <- rbindlist(collection_base_pred_list[c(1, 5, 9)])
-split_trigrams_dt <- rbindlist(collection_base_pred_list[c(2, 6, 10)])
-split_fourgrams_dt <- rbindlist(collection_base_pred_list[c(3, 7, 11)])
-split_fivegrams_dt <- rbindlist(collection_base_pred_list[c(4, 8, 12)])
-  
-# split_ngrams_dt <- rbindlist(collection_base_pred_list)
-
-# Succesful base-prediction splitting? Clean up!
-rm(parallel_list2)
-rm(collection_base_pred_list)
-rm(bigrams_dt)
-rm(trigrams_dt)
-rm(fourgrams_dt)
+# Clean up
+rm(train_tokens)
 
 ```
 
+## Maximum Likelihood Estimators
+
 ```{r cache=TRUE}
 
-# Counting Maximum Likelihood Estimators
+# For easy calculation we split the ngrams into single word columns for which we use this function
 
-mle_calculator <- function(split_ngram) {
+split_ngrams <- function(ngrams_dt, n){
   
-  split_ngram <- data.table::data.table(split_ngram)
-  split_ngram[, .(prediction, norm = .N), by = .(base) # count base frequency to normalise
-              ][, .(norm, frequency = .N), by = .(base, prediction) # count ngram frequency
-                ][, .(base, prediction, norm, frequency, mle = frequency / norm)] # calculate MLE
+  base_parts <- c("base_five",
+                  "base_four",
+                  "base_tri",
+                  "base_bi")
+  base_start <- 6 - n
+  base_end <- n - 1
+  ngrams_dt <- ngrams_dt %>%
+                  separate(ngram,
+                           into = c(base_parts[base_start:4],
+                                    "prediction"),
+                           sep = " ",
+                           fill = "left") %>%
+                  unite(1:base_end, col = "base", sep = " ")
   
 }
 
-# MLE calculation PARALLEL
+# Splitting ngrams
 
-# cl4 <- makeCluster(4)
-# 
-# print("Time to calculate MLEs PARALLEL")
-# system.time(mle_list <- parLapply(cl4,
-#                                   list(split_bigrams_dt,
-#                                        split_trigrams_dt,
-#                                        split_fourgrams_dt),
-#                                   mle_calculator))
-# 
-# stopCluster(cl4)
-# 
-# bigram_mle <- mle_list[[1]]
-# trigram_mle <- mle_list[[2]]
-# fourgram_mle <- mle_list[[3]]
+print("Time of splitting training bigrams to words in columns")
+system.time(train_bi_split_dt <- split_ngrams(train_bigram_dt, 2))
+print("Time of splitting training trigrams to words in columns")
+system.time(train_tri_split_dt <- split_ngrams(train_trigram_dt, 3))
+# print("Time of splitting training fourgrams to words in columns")
+# system.time(train_four_split_dt <- split_ngrams(train_fourgram_dt, 4))
+# print("Time of splitting training trigrams to words in columns")
+# system.time(train_five_split_dt <- split_ngrams(train_fivegram_dt, 5))
 
-# Basic MLE calculation SEEMS FASTER?!
+# A function for calculating Maximum Likelihood Estimations with optional add-k smoothing
 
-system.time(bigram_mle <- mle_calculator(split_bigrams_dt))
-system.time(trigram_mle <- mle_calculator(split_trigrams_dt))
-system.time(fourgram_mle <- mle_calculator(split_fourgrams_dt))
-system.time(fivegram_mle <- mle_calculator(split_fivegrams_dt))
+mle_calculator <- function(split_ngram, smoother, voc_size) {
+
+  k <- smoother # code was prepared for add-k smoothing
+  V <- voc_size # but doing more research this does not seem to perform well
+  
+             # count base frequency to normalise
+  dt <- split_ngram[, .(prediction, base_ct = .N), by = .(base) 
+               # count ngram frequency
+              ][, .(base_ct, ngram_ct = .N), by = .(base, prediction) 
+                 # calculate MLE
+                ][, .(base,
+                      prediction,
+                      base_ct,
+                      ngram_ct,
+                      mle = (ngram_ct + k) / (base_ct + (k * V)))]
+  
+  setkey(dt)
+  unique(dt)
+  
+}
+
+# Calculating vocabulary size for smoothing
+
+print("Time to calculate vocabulary size training set")
+system.time(train_V <- length(unique(unlist(train_tokens))))
+
+
+# N model calculation
+
+print("Time to calculate bigram MLEs with add-one smoothing")
+system.time(train_bi_mle <- mle_calculator(train_bi_split_dt, 1, train_V))
+print("Time to calculate trigram MLEs with add-one smoothing")
+system.time(train_tri_mle <- mle_calculator(train_tri_split_dt, 1, train_V))
+# print("Time to calculate fourgram MLEs with add-one smoothing")
+# system.time(train_four_mle <- mle_calculator(train_four_split_dt, 1, train_V))
+# print("Time to calculate fivegram MLEs with add-one smoothing")
+# system.time(train_five_mle <- mle_calculator(train_five_split_dt, 1, train_V))
 
 # Succesful MLE calculation? Clean up!
-# rm(mle_list)
-rm(split_bigrams_dt)
-rm(split_trigrams_dt)
-rm(split_fourgrams_dt)
-rm(split_fivegrams_dt)
+rm(train_bigram_dt)
+rm(train_trigram_dt)
+# rm(train_fourgram_dt)
+# rm(train_fivegram_dt)
 
-# Smoothing: add-one of count equals zero
-
-# n-grams that are aggregated into three columns, a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
+rm(train_bi_split_dt)
+rm(train_tri_split_dt)
+# rm(train_four_split_dt)
+# rm(train_five_split_dt)
 
 ```
 
-## Looking up the most probable next word given an input string
+
+## Model evaluation: Perplexity
+
+The best evaluation method is in-vivo evaluation, but perplexity is a standard alternative.
+
+```{r cache=TRUE}
+
+# Perplexity is a simple way to evaluate ngram models. It is basically the product of MLEs counted on the training set, applied to the test set.
+
+# Extract sentences
+
+print("Time to extract sentences out of testing set:")
+system.time(test_sentences <- to_sentences(test))
+
+# Clean and tokenize datasets in same way
+
+print("Time to preprocess testing set:")
+test_tokens <- preprocess(test_sentences)
+
+# Extracting bigrams
+
+print("Time to create bigrams from testing tokens")
+system.time(test_bigram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 2, concatenator = " "))))
+str(test_bigram_dt)
+
+# Extracting trigrams
+
+print("Time to create trigrams from testing tokens")
+system.time(test_trigram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 3, concatenator = " "))))
+str(test_trigram_dt)
+
+# # Extracting fourgrams
+# 
+# print("Time to create fourgrams from testing tokens")
+# system.time(test_fourgram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 4, concatenator = " "))))
+# str(test_fourgram_dt)
+# 
+# # Extracting fivegrams
+# 
+# print("Time to create fivegrams from testing tokens")
+# system.time(test_fivegram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 5, concatenator = " "))))
+# str(test_trigram_dt)
+
+# Split to base and prediction
+
+print("Time of splitting testing bigrams to words in columns")
+system.time(test_bi_split_dt <- split_ngrams(test_bigram_dt, 2))
+print("Time of splitting testing trigrams to words in columns")
+system.time(test_tri_split_dt <- split_ngrams(test_trigram_dt, 3))
+# print("Time of splitting testing bigrams to words in columns")
+# system.time(test_four_split_dt <- split_ngrams(test_fourgram_dt, 4))
+# print("Time of splitting testing trigrams to words in columns")
+# system.time(test_five_split_dt <- split_ngrams(test_fivegram_dt, 5))
+
+
+# A function to join training MLEs to test ngrams
+
+model_apply <- function(test, train){
+  
+  # add training mles to machting testing ngrams
+  dt <- data.table(left_join(test,
+                             train[, c("base", "prediction", "mle")]))
+  
+  # set NAs to zero for summation and return
+  dt[is.na(mle), mle := 0]
+  
+}
+
+# Apply models trained to test set
+test_bi <- model_apply(test_bi_split_dt, train_bi_mle)
+test_tri <- model_apply(test_tri_split_dt, train_tri_mle)
+# test_four <- model_apply(test_four_split_dt, train_four_mle)
+# test_five <- model_apply(test_five_split_dt, train_five_mle)
+
+# Calculate Perplexity
+
+test_bi_PP <- exp(-sum(log(test_bi$mle)) / length(test_bi$mle))
+test_tri_PP <- exp(-sum(log(test_tri$mle)) / length(test_tri$mle))
+test_four_PP <- exp(-sum(log(test_four$mle)) / length(test_four$mle))
+test_five_PP <- exp(-sum(log(test_five$mle)) / length(test_five$mle))
+
+```
+
+
+## Improving smoothing
+
+We applied simple "add-one" or Laplace smoothing initially. Hiever, to improve smoothing, we can try to use the hold out set to improve the smoothing to add-k smoothing. K is determined by the best fit with the hold out sample.
+
+```{r cache=TRUE}
+
+print("Time to calculate vocabulary size hold out set")
+system.time(hold_V <- length(unique(unlist(hold_tokens))))
+
+
+
+# Calculat models on hold out sample
+
+
+# Calculate best fit
+
+
+# Recalculate models.
+
+
+# new perplexity
+
+```
+
+
+
+## Creating lookup tables for App
 
 ```{r cache=TRUE}
 
 # Now lets create a lookup table from the raw bigram probabilities
-
-# Lookup data.table per ngram consisting of three columns: a base consisting of n-1 words in the n-gram, and a prediction that is the last word, and a count variable for the frequency of occurrence of this n-gram
 
 ngram_probs <- function(ngram_mle) {
 
@@ -352,43 +413,42 @@ ngram_probs <- function(ngram_mle) {
   
 }
 
-# Lookup table creation PARALLEL
-
-# cl5 <- makeCluster(4)
-# 
-# print("Time to create lookup tables PARALLEL")
-# system.time(lookup_list <- parLapply(cl5,
-#                                      list(bigram_mle,
-#                                           trigram_mle,
-#                                           fourgram_mle,
-#                                           fivegram_mle),
-#                                      ngram_probs))
-# 
-# stopCluster(cl5)
-# 
-# 
-# bigram_lookup <- lookup_list[[1]]
-# trigram_lookup <- lookup_list[[2]] 
-# fourgram_lookup <- lookup_list[[3]]
-# fivegram_lookup <- lookup_list[[4]]
-
 # Basic lookup table creation SEEMS FASTER?!
 
 system.time(bigram_lookup <- ngram_probs(bigram_mle))
 system.time(trigram_lookup <- ngram_probs(trigram_mle))
-system.time(fourgram_lookup <- ngram_probs(fourgram_mle))
-system.time(fivegram_lookup <- ngram_probs(fivegram_mle))
+# system.time(fourgram_lookup <- ngram_probs(fourgram_mle))
+# system.time(fivegram_lookup <- ngram_probs(fivegram_mle))
 
 # Lets save the lookup table as an rds file to send with Shiny App
 
-ngram_lookup <- rbindlist(list(bigram_lookup, trigram_lookup, fourgram_lookup, fivegram_lookup))
+ngram_lookup <- rbindlist(list(bigram_lookup,
+                               trigram_lookup))
+                               #fourgram_lookup,
+                               #fivegram_lookup))
+
 saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
 
 # Succesfull ngram lookup? Clean up!
-# rm(lookup_list)
+
+rm(bigram_mle)
+rm(trigram_mle)
+# rm(fourgram_mle)
+# rm(fivegram_mle)
+
 rm(bigram_lookup)
 rm(trigram_lookup)
-rm(fourgram_lookup)
+# rm(fourgram_lookup)
+# rm(fivegram_lookup)
+
+```
+
+
+# Testing predictions
+
+```{r cache=TRUE}
+
+# This code is provided for testing only. A more elaborate version will be defined in the server function of the Shiny web app.
 
 # A lookup function: given a string, look up the most probable next word
 
@@ -401,6 +461,10 @@ predictWord <- function(string, ngram_lookup) {
 }
 
 ```
+
+
+
+https://youtu.be/NlmKb0X-nkA
 
 
 ## Ideas for improvement
