@@ -83,6 +83,12 @@ print(paste("Training set elements: ", length(test)))
 
 # Clean up
 rm(collection_txt)
+rm(train_frac)
+rm(all_ind)
+rm(train_ind)
+rm(rest_ind)
+rm(hold_ind)
+rm(test_ind)
 
 ```
 
@@ -153,8 +159,13 @@ preprocess <- function(sample) {
 print("Time to preprocess training set:")
 train_tokens <- preprocess(train_sentences)
 
+# Save preprocessed training data
+saveRDS(train_tokens, file = "train_tokens.rds")
+
 # Clean up
 rm(train)
+rm(train_sentences)
+rm(train_tokens)
 
 ```
 
@@ -166,45 +177,21 @@ We did language modeling with ngrams. Bi-/tri-/four-/fivegrams were extracted. N
 
 # Extracting ngrams for training. This code seems somewhat unelegantly repetivite, but it allows for flexible changes and avoids memory problems related to using lists and lapply e.g. We use Quanteda functions below which can make use of 10 threads (on my mahcine!)
 
-
-# Extracting bigrams
-
-print("Time to create bigrams from training tokens")
-system.time(train_bigram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 2, concatenator = " "))))
-str(train_bigram_dt)
-
-# Extracting trigrams
-
-print("Time to create trigrams from training tokens")
-system.time(train_trigram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 3, concatenator = " "))))
-str(train_trigram_dt)
-
-# # Extracting fourgrams
-# 
-# print("Time to create fourgrams from training tokens")
-# system.time(train_fourgram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 4, concatenator = " "))))
-# str(train_fourgram_dt)
-# 
-# # Extracting fivegrams
-# 
-# print("Time to create fivegrams from training tokens")
-# system.time(train_fivegram_dt <- data.table(ngram = unlist(tokens_ngrams(train_tokens, n = 5, concatenator = " "))))
-# str(train_trigram_dt)
-
-# Clean up
-rm(train_sentences)
+extract_ngrams <- function(sentence_tokens, ngram_size){
+  
+  sentence_ngrams <- tokens_ngrams(sentence_tokens,
+                                   n = ngram_size,
+                                   concatenator = " ")
+  
+  dt <- data.table(ngram = unlist(sentence_ngrams))
+  
+}
 
 ```
 
 ## Maximum Likelihood Estimators
 
 ```{r cache=TRUE}
-
-# Calculating vocabulary size for smoothing
-
-print("Time to calculate vocabulary size training set")
-system.time(train_V <- length(unique(unlist(train_tokens))))
-rm(train_tokens)
 
 # For easy calculation we split the ngrams into single word columns for which we use this function
 
@@ -225,17 +212,6 @@ split_ngrams <- function(ngrams_dt, n){
                   unite(1:base_end, col = "base", sep = " ")
   
 }
-
-# Splitting ngrams
-
-print("Time of splitting training bigrams to words in columns")
-system.time(train_bi_split_dt <- split_ngrams(train_bigram_dt, 2))
-print("Time of splitting training trigrams to words in columns")
-system.time(train_tri_split_dt <- split_ngrams(train_trigram_dt, 3))
-# print("Time of splitting training fourgrams to words in columns")
-# system.time(train_four_split_dt <- split_ngrams(train_fourgram_dt, 4))
-# print("Time of splitting training trigrams to words in columns")
-# system.time(train_five_split_dt <- split_ngrams(train_fivegram_dt, 5))
 
 # A function for calculating Maximum Likelihood Estimations with optional add-k smoothing
 
@@ -260,32 +236,65 @@ mle_calculator <- function(split_ngram, smoother, voc_size) {
   
 }
 
-# N model calculation
-
-print("Time to calculate bigram MLEs with add-one smoothing")
-system.time(train_bi_mle <- mle_calculator(train_bi_split_dt, 1, train_V))
-print("Time to calculate trigram MLEs with add-one smoothing")
-system.time(train_tri_mle <- mle_calculator(train_tri_split_dt, 1, train_V))
-# print("Time to calculate fourgram MLEs with add-one smoothing")
-# system.time(train_four_mle <- mle_calculator(train_four_split_dt, 1, train_V))
-# print("Time to calculate fivegram MLEs with add-one smoothing")
-# system.time(train_five_mle <- mle_calculator(train_five_split_dt, 1, train_V))
-
-# Succesful MLE calculation? Clean up!
-rm(train_bigram_dt)
-rm(train_trigram_dt)
-# rm(train_fourgram_dt)
-# rm(train_fivegram_dt)
-
-rm(train_bi_split_dt)
-rm(train_tri_split_dt)
-# rm(train_four_split_dt)
-# rm(train_five_split_dt)
-
-gc(verbose = TRUE)
-
 ```
 
+## Ngram model creation
+
+```{r}
+
+ngram_model <- function(toks, name = "bigram", size = 2, smoother = 1, voc_size){
+  
+  # Extracting ngrams
+  
+  print(paste("Time to create", name, "from tokens"))
+  system.time(ngrams_dt <- extract_ngrams(toks, size))
+  str(ngrams_dt)
+  
+  # Splitting ngrams
+  
+  print(paste("Time of splitting", name, "to words in columns"))
+  system.time(split_dt <- split_ngrams(ngrams_dt, size))
+  str(split_dt)
+  rm(ngrams_dt)
+  
+  # MLE ngram calculation
+  
+  print(paste("Time to calculate", name, "MLEs with add-one smoothing"))
+  system.time(ngram_mle <- mle_calculator(split_dt, smoother, voc_size))
+  rm(split_dt)
+
+  # Save to disk
+  saveRDS(ngram_mle, file = paste0(name, "_mle.rds")) 
+  
+  # Succesful MLE calculation? Clean up!
+  gc(verbose = TRUE)
+  
+  print(paste("Time to generate", name, "model on training set:"))
+}
+
+# Load tokens
+train_tokens <- readRDS("train_tokens.rds")
+
+# Calculating vocabulary size for smoothing
+print("Time to calculate vocabulary size training set")
+system.time(train_V <- length(unique(unlist(train_tokens))))
+
+# Bigram model creation
+system.time(ngram_model(train_tokens, "bigram", 2, smoother = 1, voc_size = train_V))
+
+# Trigram model creation
+system.time(ngram_model(train_tokens, "trigram", 3, smoother = 1, voc_size = train_V))
+
+# Fourgram model creation
+system.time(ngram_model(train_tokens, "fourgram", 4, smoother = 1, voc_size = train_V))
+
+# Fivegram model creation
+system.time(ngram_model(train_tokens, "fivegram", 5, smoother = 1, voc_size = train_V))
+
+# Clean up
+rm(train_tokens)
+gc()
+```
 
 ## Model evaluation: Perplexity
 
@@ -295,97 +304,68 @@ The best evaluation method is in-vivo evaluation, but perplexity is a standard a
 
 # Perplexity is a simple way to evaluate ngram models. It is basically the product of MLEs counted on the training set, applied to the test set.
 
-# Extract sentences
+# Extract sentences from test set
 
 print("Time to extract sentences out of testing set:")
 system.time(test_sentences <- to_sentences(test))
 
-# Clean and tokenize datasets in same way
+# Clean and tokenize test set in same as when modeling
 
 print("Time to preprocess testing set:")
 test_tokens <- preprocess(test_sentences)
 rm(test_sentences)
 
-# Extracting bigrams
+# Calculating vocabulary size for perplexity calculation
+print("Time to calculate vocabulary size testing set")
+system.time(test_V <- length(unique(unlist(test_tokens))))
 
-print("Time to create bigrams from testing tokens")
-system.time(test_bigram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 2, concatenator = " "))))
-str(test_bigram_dt)
+# A function to test an ngram model on testing set
 
-# Extracting trigrams
-
-print("Time to create trigrams from testing tokens")
-system.time(test_trigram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 3, concatenator = " "))))
-str(test_trigram_dt)
-
-# # Extracting fourgrams
-# 
-# print("Time to create fourgrams from testing tokens")
-# system.time(test_fourgram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 4, concatenator = " "))))
-# str(test_fourgram_dt)
-# 
-# # Extracting fivegrams
-# 
-# print("Time to create fivegrams from testing tokens")
-# system.time(test_fivegram_dt <- data.table(ngram = unlist(tokens_ngrams(test_tokens, n = 5, concatenator = " "))))
-# str(test_trigram_dt)
-
-# Split to base and prediction
-
-print("Time of splitting testing bigrams to words in columns")
-system.time(test_bi_split_dt <- split_ngrams(test_bigram_dt, 2))
-
-print("Time of splitting testing trigrams to words in columns")
-system.time(test_tri_split_dt <- split_ngrams(test_trigram_dt, 3))
-# print("Time of splitting testing bigrams to words in columns")
-# system.time(test_four_split_dt <- split_ngrams(test_fourgram_dt, 4))
-# print("Time of splitting testing trigrams to words in columns")
-# system.time(test_five_split_dt <- split_ngrams(test_fivegram_dt, 5))
-
-rm(test_bigram_dt)
-rm(test_trigram_dt)
-
-# A function to join training MLEs to test ngrams
-
-model_apply <- function(test, train){
+test_model <- function(test_toks, name = "bigram", size = 2, voc_size){
   
-  # add training mles to machting testing ngrams
-  dt <- data.table(left_join(test,
-                             train[, c("base", "prediction", "mle")]))
+  # Extract ngrams
+  ngrams_dt <- extract_ngrams(test_toks, size)
+  str(ngrams_dt)
   
+  # Split ngrams
+  split_dt <- split_ngrams(ngrams_dt, size)
+  str(split_dt)
+  rm(ngrams_dt)
+  
+  # Read in model MLE
+  file_name <- paste0(name, "_mle.rds")
+  print(paste("Reading file", file_name))
+  model_mle <- readRDS(file_name)
+  
+  # Apply model test set
+  dt <- data.table(left_join(split_dt,
+                             model_mle[, c("base", "prediction", "mle")]))
+  head(dt)
+  tail(dt)
+  
+  # Return model perplexity
+  print(paste(name, "model on testing set perplexity:"))
+  print(sum(log(1/dt[, mle]), na.rm = TRUE)^1/voc_size)
+
 }
 
-# Apply models trained to test set
-test_bi <- model_apply(test_bi_split_dt, train_bi_mle)
+# Test models
+test_bi_PP <- test_model(test_tokens, "bigram", 2, test_V)
+gc()
+test_tri_PP <- test_model(test_tokens, "trigram", 3, test_V)
+gc()
+test_four_PP <- test_model(test_tokens, "fourgram", 4, test_V)
+gc()
+system.time(test_five_PP <- test_model(test_tokens, "fivegram", 5, test_V))
+gc()
 
-test_tri <- model_apply(test_tri_split_dt, train_tri_mle)
-# test_four <- model_apply(test_four_split_dt, train_four_mle)
-# test_five <- model_apply(test_five_split_dt, train_five_mle)
-
-rm(test_bi_split_dt)
-rm(test_tri_split_dt)
-
-# Calculate Perplexity
-
-print("Bigram model on testing set perplexity:")
-test_bi_PP <- exp(-sum(log(test_bi$mle), na.rm = TRUE) / length(test_bi$mle))
-
-rm(train_bi_mle)
-rm(test_bi)
-
-print("Trigram model on testing set perplexity:")
-test_tri_PP <- exp(-sum(log(test_tri$mle), na.rm = TRUE) / length(test_tri$mle))
-
-print("Fourgram model on testing set perplexity:")
-test_four_PP <- exp(-sum(log(test_four$mle), na.rm = TRUE) / length(test_four$mle))
-
-print("Fivegram model on testing set perplexity:")
-test_five_PP <- exp(-sum(log(test_five$mle), na.rm = TRUE) / length(test_five$mle))
+# Save model results
+test_results <- list(c("bigram", "trigram", "fourgram", "fivegram"), c(test_bi_PP, test_tri_PP, test_four_PP, test_five_PP))
 
 ```
 
 
-## Improving smoothing
+## Improving smoothing?
 
 We applied simple "add-one" or Laplace smoothing initially. Hiever, to improve smoothing, we can try to use the hold out set to improve the smoothing to add-k smoothing. K is determined by the best fit with the hold out sample.
 
@@ -425,31 +405,25 @@ ngram_probs <- function(ngram_mle) {
   
 }
 
-# Basic lookup table creation SEEMS FASTER?!
+# Basic lookup tables
 
-system.time(bigram_lookup <- ngram_probs(bigram_mle))
-system.time(trigram_lookup <- ngram_probs(trigram_mle))
-# system.time(fourgram_lookup <- ngram_probs(fourgram_mle))
-# system.time(fivegram_lookup <- ngram_probs(fivegram_mle))
+system.time(bigram_lookup <- ngram_probs(readRDS("bigram_mle.rds")))
+system.time(trigram_lookup <- ngram_probs(readRDS("trigram_mle.rds")))
+system.time(fourgram_lookup <- ngram_probs(readRDS("fourgram_mle.rds")))
+system.time(fivegram_lookup <- ngram_probs(readRDS("fivegram_mle.rds")))
 
-# Lets save the lookup table as an rds file to send with Shiny App
+# Merge the lookup table as an rds file to send with Shiny App
 
-ngram_lookup <- rbindlist(list(bigram_lookup,
-                               trigram_lookup))
-                               #fourgram_lookup,
-                               #fivegram_lookup))
+# ngram_lookup <- rbindlist(list(bigram_lookup,
+#                                trigram_lookup,
+#                                fourgram_lookup,
+#                                fivegram_lookup))
+# 
+# saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
 
-saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
-
-# Succesfull ngram lookup? Clean up!
-
-rm(bigram_mle)
-rm(trigram_mle)
-# rm(fourgram_mle)
-# rm(fivegram_mle)
-
-rm(bigram_lookup)
-rm(trigram_lookup)
+# Clean up
+# rm(bigram_lookup)
+# rm(trigram_lookup)
 # rm(fourgram_lookup)
 # rm(fivegram_lookup)
 
@@ -464,12 +438,62 @@ rm(trigram_lookup)
 
 # A lookup function: given a string, look up the most probable next word
 
-predictWord <- function(string, ngram_lookup) {
+predictWord <- function(string) {
+  
+  # parse string: remove punctiation, lowercase, split into words
+  words <- str_to_lower(string) %>%
+             str_remove_all(pattern = "[:punct:]") %>%
+             str_split(pattern = " ")
+  
+  # check length
+  words_n <- length(words[[1]])
+  
+  if(words_n >= 5){ start <- words_n - 3 } else start <- 1
+  
+  end <- words_n
+  selection <- words[[1]][start:end]
+  str(selection)
+  lookup_n <- length(selection)
+  
+  # What to look up in the lookup table
+  print(paste("Lookup: ", lookup))
   
   # Lookup ngram in data.table organised by ngram probability
   
-  ngram_lookup[base == string][1]$prediction
+  ngram_lookup <- function(level, selection){
+      lookup <- str_c(selection, collapse = " ")
+      if(level = 5){ # fivegram lookup
+        prediction <- fivegram_lookup[base == lookup][1]$prediction
+          if(!is.na(prediction)){
+            print("FOUND SOMETHING!")
+            return(prediction)
+            break
+          }
+      }
+      
+  }
   
+  
+
+  # fourgram lookup
+  lookup <- 
+  fourgram_lookup[base == lookup, mle := 0.4*mle] # apply discount
+  prediction <- fourgram_lookup[base == lookup][1]$prediction
+  
+  if(!is.na(prediction)){
+    print("FOUND SOMETHING!")
+    return(prediction)
+    break
+  }
+  # trigram lookup
+  trigram_lookup[base == lookup, mle := 0.4*mle] # apply discount
+  prediction <- fourgram_lookup[base == lookup][1]$prediction
+  
+  if(!is.na(prediction)){
+    print("FOUND SOMETHING!")
+    return(prediction)
+    break
+  }
 }
 
 ```
