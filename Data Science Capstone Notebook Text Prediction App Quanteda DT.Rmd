@@ -81,6 +81,9 @@ print(paste("Training set elements: ", length(train)))
 print(paste("Hold out set elements: ", length(hold)))
 print(paste("Training set elements: ", length(test)))
 
+# Clean up
+rm(collection_txt)
+
 ```
 
 ## Preprocessing: cleaning and tokenization
@@ -108,8 +111,6 @@ to_sentences <- function(sample) {
 # Extract sentences
 print("Time to extract sentences out of training set:")
 system.time(train_sentences <- to_sentences(train))
-print("Time to extract sentences out of set:")
-system.time(hold_sentences <- to_sentences(hold))
 
 # A function to preprocess and tokenize to words
 
@@ -148,18 +149,12 @@ preprocess <- function(sample) {
   
 }
 
-# Clean and tokenize datasets in same way
+# Clean and tokenize training set
 print("Time to preprocess training set:")
 train_tokens <- preprocess(train_sentences)
-print("Time to preprocess hold out set:")
-hold_tokens <- preprocess(hold_sentences)
-print("Time to preprocess testing set:")
-test_tokens <- preprocess(test_sentences)
 
 # Clean up
 rm(train)
-rm(hold)
-rm(test)
 
 ```
 
@@ -197,13 +192,19 @@ str(train_trigram_dt)
 # str(train_trigram_dt)
 
 # Clean up
-rm(train_tokens)
+rm(train_sentences)
 
 ```
 
 ## Maximum Likelihood Estimators
 
 ```{r cache=TRUE}
+
+# Calculating vocabulary size for smoothing
+
+print("Time to calculate vocabulary size training set")
+system.time(train_V <- length(unique(unlist(train_tokens))))
+rm(train_tokens)
 
 # For easy calculation we split the ngrams into single word columns for which we use this function
 
@@ -247,7 +248,7 @@ mle_calculator <- function(split_ngram, smoother, voc_size) {
   dt <- split_ngram[, .(prediction, base_ct = .N), by = .(base) 
                # count ngram frequency
               ][, .(base_ct, ngram_ct = .N), by = .(base, prediction) 
-                 # calculate MLE
+                 # calculate the smoothed MLE
                 ][, .(base,
                       prediction,
                       base_ct,
@@ -258,12 +259,6 @@ mle_calculator <- function(split_ngram, smoother, voc_size) {
   unique(dt)
   
 }
-
-# Calculating vocabulary size for smoothing
-
-print("Time to calculate vocabulary size training set")
-system.time(train_V <- length(unique(unlist(train_tokens))))
-
 
 # N model calculation
 
@@ -287,12 +282,14 @@ rm(train_tri_split_dt)
 # rm(train_four_split_dt)
 # rm(train_five_split_dt)
 
+gc(verbose = TRUE)
+
 ```
 
 
 ## Model evaluation: Perplexity
 
-The best evaluation method is in-vivo evaluation, but perplexity is a standard alternative.
+The best evaluation method is in-vivo evaluation, but perplexity is a standard alternative applied on a separate test set.
 
 ```{r cache=TRUE}
 
@@ -307,6 +304,7 @@ system.time(test_sentences <- to_sentences(test))
 
 print("Time to preprocess testing set:")
 test_tokens <- preprocess(test_sentences)
+rm(test_sentences)
 
 # Extracting bigrams
 
@@ -336,6 +334,7 @@ str(test_trigram_dt)
 
 print("Time of splitting testing bigrams to words in columns")
 system.time(test_bi_split_dt <- split_ngrams(test_bigram_dt, 2))
+
 print("Time of splitting testing trigrams to words in columns")
 system.time(test_tri_split_dt <- split_ngrams(test_trigram_dt, 3))
 # print("Time of splitting testing bigrams to words in columns")
@@ -343,6 +342,8 @@ system.time(test_tri_split_dt <- split_ngrams(test_trigram_dt, 3))
 # print("Time of splitting testing trigrams to words in columns")
 # system.time(test_five_split_dt <- split_ngrams(test_fivegram_dt, 5))
 
+rm(test_bigram_dt)
+rm(test_trigram_dt)
 
 # A function to join training MLEs to test ngrams
 
@@ -352,23 +353,34 @@ model_apply <- function(test, train){
   dt <- data.table(left_join(test,
                              train[, c("base", "prediction", "mle")]))
   
-  # set NAs to zero for summation and return
-  dt[is.na(mle), mle := 0]
-  
 }
 
 # Apply models trained to test set
 test_bi <- model_apply(test_bi_split_dt, train_bi_mle)
+
 test_tri <- model_apply(test_tri_split_dt, train_tri_mle)
 # test_four <- model_apply(test_four_split_dt, train_four_mle)
 # test_five <- model_apply(test_five_split_dt, train_five_mle)
 
+rm(test_bi_split_dt)
+rm(test_tri_split_dt)
+
 # Calculate Perplexity
 
-test_bi_PP <- exp(-sum(log(test_bi$mle)) / length(test_bi$mle))
-test_tri_PP <- exp(-sum(log(test_tri$mle)) / length(test_tri$mle))
-test_four_PP <- exp(-sum(log(test_four$mle)) / length(test_four$mle))
-test_five_PP <- exp(-sum(log(test_five$mle)) / length(test_five$mle))
+print("Bigram model on testing set perplexity:")
+test_bi_PP <- exp(-sum(log(test_bi$mle), na.rm = TRUE) / length(test_bi$mle))
+
+rm(train_bi_mle)
+rm(test_bi)
+
+print("Trigram model on testing set perplexity:")
+test_tri_PP <- exp(-sum(log(test_tri$mle), na.rm = TRUE) / length(test_tri$mle))
+
+print("Fourgram model on testing set perplexity:")
+test_four_PP <- exp(-sum(log(test_four$mle), na.rm = TRUE) / length(test_four$mle))
+
+print("Fivegram model on testing set perplexity:")
+test_five_PP <- exp(-sum(log(test_five$mle), na.rm = TRUE) / length(test_five$mle))
 
 ```
 
