@@ -7,7 +7,7 @@ output:
     df_print: paged
 ---
 
-## Coursera Datat Science Specialization Capstone project
+## Coursera Data Science Specialization Capstone project
 
 The goal of the capstone proejct is to create a Shiny Web app that provides predicive text suggestion for a number of typed words.
 
@@ -29,8 +29,8 @@ require(gridExtra)
 require(microbenchmark) # for comparing function performance
 require(parallel) # for parallel processing
 
+require(qdap) # for text preparation
 require(quanteda) # for text tokenization
-quanteda_options(threads = 10) # using parallell processing; adjust for available CPU!
 
 require(data.table) # for fast table calculation and lookup
 
@@ -40,29 +40,96 @@ require(data.table) # for fast table calculation and lookup
 
 Three files were provided with a selection of tweets, news items and blog entries.
 
-### Reading data
+### Reading and cleaning data
 
 ```{r cache=TRUE}
 
 twitter_txt <- read_lines("en_US.twitter.txt") # read in tweets
 news_txt <- read_lines("en_US.news.txt") # read in news items
 blogs_txt <- read_lines("en_US.blogs.txt") # read in blog entries
- 
-collection_txt <- c(twitter_txt, news_txt, blogs_txt) # combine into one collection
-rm(list = c("twitter_txt", "news_txt", "blogs_txt")) # remove separate source objects
+
+```
+
+## Preprocessing: cleaning sources
+
+Removing:
+- Profanity filtering
+- measurements
+
+```{r cache=TRUE}
+
+### Using QDAP functions for some initial cleaning and replacing
+
+# A function for QDAP cleaning
+
+clean_qdap <- function(sample_text){
+  
+  # Replace Abbreviations
+  sample_text <- qdap::replace_ordinal(sample_text)
+  
+  # Replace Numbers With Text Representation
+  sample_text <- qdap::replace_number(sample_text, remove = TRUE)
+  
+  # Replace Abbreviations
+  sample_text <- qdap::replace_abbreviation(sample_text)
+  
+  # Replace Contractions
+  sample_text <- qdap::replace_contraction(sample_text)
+  
+  # Replace Symbols With Word Equivalents
+  sample_text <- qdap::replace_symbol(sample_text, # except for # and @
+                                      pound = FALSE, # as we have twitter
+                                      at = FALSE) # texts to process later
+  
+  # Remove dashes and brackets
+  sample_text <- qdap::qprep(sample_text)
+  
+  sample_text # returne cleaned text
+}
+
+# Apply QDAP cleaning parallel
+
+cl <- makeCluster(10)
+
+print("Total time for QDAP cleaning")
+system.time(clean_samples <- parLapply(cl, list(twitter_txt, news_txt, blogs_txt), clean_qdap))
+
+stopCluster(cl)
+
+# Extract parallel computing results
+
+clean_twitter <- clean_samples[[1]]
+clean_news <- clean_samples[[2]]
+clean_blogs <- clean_samples[[3]]
+
+saveRDS(clean_twitter, file = "clean_twitter.rds")
+saveRDS(clean_news, file = "clean_news.rds")
+saveRDS(clean_blogs, file = "clean_blogs.rds")
+
+# Clean up
+rm(twitter_txt)
+rm(news_txt)
+rm(blogs_txt)
+
+```
+
+### Merging source and extracting training, hold-out and testing samples
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+
+# Merging into one collection
+
+clean_twitter <- readRDS("clean_twitter.rds")
+clean_news <- readRDS("clean_news.rds")
+clean_blogs <- readRDS("clean_blogs.rds")
+
+collection_txt <- c(clean_twitter, clean_news, clean_blogs) # combine into one collection
+rm(list = c("clean_twitter", "clean_news", "clean_blogs")) # remove separate source objects
 
 print("Size of character vector with all collection elements:")
 format(object.size(collection_txt), units = "auto")
 print("NUmber of character elements:")
 length(collection_txt)
-
-```
-
-### Extracting samples
-
-Given the rather large files I will take 10 random entries from each source to explore.
-
-```{r message=FALSE, warning=FALSE, cache=TRUE}
 
 # Creating training set, hold out set and testing set
 
@@ -92,24 +159,16 @@ rm(test_ind)
 
 ```
 
-## Preprocessing: cleaning and tokenization
 
-TODO
 
-Removing:
-- Profanity filtering
-- measurements
-
-Changing:
-- word combinations to full: can't -> cannot
-
-Stemming?
+# Preprocessing: tokenizing
 
 ```{r cache=TRUE}
 
-# Using Quanteda function combining preprocess operations
+### Quanteda functions combining to tokenize and further preprocess
+quanteda_options(threads = 10) # using parallell processing; adjust for available CPU!
 
-# firs we tokenize to sentences, so that later bigrams are not created across sentences
+# First, we tokenize to sentences, so that later bigrams are not created across sentences
 to_sentences <- function(sample) {
   unlist(tokens(char_tolower(sample), what = "sentence", verbose = TRUE))
 }
@@ -187,12 +246,6 @@ extract_ngrams <- function(sentence_tokens, ngram_size){
   
 }
 
-```
-
-## Maximum Likelihood Estimators
-
-```{r cache=TRUE}
-
 # For easy calculation we split the ngrams into single word columns for which we use this function
 
 split_ngrams <- function(ngrams_dt, n){
@@ -217,7 +270,7 @@ split_ngrams <- function(ngrams_dt, n){
 
 mle_calculator <- function(split_ngram, smoother, voc_size) {
 
-  k <- smoother # code was prepared for add-k smoothing
+  k <- smoother * 0.7 # code was prepared for add-k smoothing
   V <- voc_size # but doing more research this does not seem to perform well
   
              # count base frequency to normalise
@@ -225,11 +278,12 @@ mle_calculator <- function(split_ngram, smoother, voc_size) {
                # count ngram frequency
               ][, .(base_ct, ngram_ct = .N), by = .(base, prediction) 
                  # calculate the smoothed MLE
-                ][, .(base,
-                      prediction,
-                      base_ct,
-                      ngram_ct,
-                      mle = (ngram_ct + k) / (base_ct + (k * V)))]
+                ][ngram_ct > 1    # prune rarest observations
+                  ][, .(base,
+                        prediction,
+                        base_ct,
+                        ngram_ct,
+                        mle = (ngram_ct + k) / (base_ct + (k * V)))]
   
   setkey(dt)
   unique(dt)
@@ -259,7 +313,7 @@ ngram_model <- function(toks, name = "bigram", size = 2, smoother = 1, voc_size)
   
   # MLE ngram calculation
   
-  print(paste("Time to calculate", name, "MLEs with add-one smoothing"))
+  print(paste("Time to calculate", name, "MLEs with add-k smoothing"))
   system.time(ngram_mle <- mle_calculator(split_dt, smoother, voc_size))
   rm(split_dt)
 
@@ -294,6 +348,7 @@ system.time(ngram_model(train_tokens, "fivegram", 5, smoother = 1, voc_size = tr
 # Clean up
 rm(train_tokens)
 gc()
+
 ```
 
 ## Model evaluation: Perplexity
@@ -360,7 +415,9 @@ system.time(test_five_PP <- test_model(test_tokens, "fivegram", 5, test_V))
 gc()
 
 # Save model results
-test_results <- list(c("bigram", "trigram", "fourgram", "fivegram"), c(test_bi_PP, test_tri_PP, test_four_PP, test_five_PP))
+test_results <- data.frame(model = c("Bigram", "Trigram", "Fourgram", "Fivegram"), perplexity = c(test_bi_PP, test_tri_PP, test_four_PP, test_five_PP))
+
+saveRDS(test_results, file = "WordPredictor/data/model_perplexities.rds")
 
 ```
 
@@ -371,10 +428,8 @@ We applied simple "add-one" or Laplace smoothing initially. Hiever, to improve s
 
 ```{r cache=TRUE}
 
-print("Time to calculate vocabulary size hold out set")
-system.time(hold_V <- length(unique(unlist(hold_tokens))))
-
-
+# print("Time to calculate vocabulary size hold out set")
+# system.time(hold_V <- length(unique(unlist(hold_tokens))))
 
 # Calculat models on hold out sample
 
@@ -412,33 +467,28 @@ system.time(trigram_lookup <- ngram_probs(readRDS("trigram_mle.rds")))
 system.time(fourgram_lookup <- ngram_probs(readRDS("fourgram_mle.rds")))
 system.time(fivegram_lookup <- ngram_probs(readRDS("fivegram_mle.rds")))
 
-# Merge the lookup table as an rds file to send with Shiny App
-
-# ngram_lookup <- rbindlist(list(bigram_lookup,
-#                                trigram_lookup,
-#                                fourgram_lookup,
-#                                fivegram_lookup))
-# 
-# saveRDS(ngram_lookup, file = "WordPredictor/data/server_lookup.rds")
-
-# Clean up
-# rm(bigram_lookup)
-# rm(trigram_lookup)
-# rm(fourgram_lookup)
-# rm(fivegram_lookup)
+# Write lookup tables to app
+saveRDS(bigram_lookup, file = "WordPredictor/data/bigram_lookup.rds")
+saveRDS(trigram_lookup, file = "WordPredictor/data/trigram_lookup.rds")
+saveRDS(fourgram_lookup, file = "WordPredictor/data/fourgram_lookup.rds")
+saveRDS(fivegram_lookup, file = "WordPredictor/data/fivegram_lookup.rds")
 
 ```
 
 
-# Testing predictions
+# Lookup function with 'stupid' back-off
 
 ```{r cache=TRUE}
 
-# This code is provided for testing only. A more elaborate version will be defined in the server function of the Shiny web app.
+# This code is provided for testing only to be included in the app.
 
 # A lookup function: given a string, look up the most probable next word
 
 predictWord <- function(string) {
+  
+  # QDAP clean string
+    string <- scrubber(string)
+    string <- qprep(string)
   
   # parse string: remove punctiation, lowercase, split into words
   words <- str_to_lower(string) %>%
@@ -456,52 +506,165 @@ predictWord <- function(string) {
   lookup_n <- length(selection)
   
   # What to look up in the lookup table
-  print(paste("Lookup: ", lookup))
+  print(paste("Lookup: ", selection))
   
   # Lookup ngram in data.table organised by ngram probability
   
-  ngram_lookup <- function(level, selection){
-      lookup <- str_c(selection, collapse = " ")
-      if(level = 5){ # fivegram lookup
-        prediction <- fivegram_lookup[base == lookup][1]$prediction
-          if(!is.na(prediction)){
-            print("FOUND SOMETHING!")
-            return(prediction)
-            break
-          }
-      }
+  start_level <- lookup_n + 1
+  print(paste("Start level:", start_level))
+  
+  ngram_lookup <- function(selection, level){
+    
+    backoff <- FALSE
+    lookup <- str_c(selection, collapse = " ")
       
-  }
-  
-  
+      if(level == 5){ # fivegram lookup
+        print("Fivegram lookup!")
+        
+        # lookup fivegram with highest MLE
+        prediction <- fivegram_lookup[base == lookup][1]$prediction
+        
+        if(!is.na(prediction)){ # if found
+          print("FOUND FIVEGRAM!")
+          print("Alternatives:")
+          print(fivegram_lookup[base == lookup])
+          return(prediction)
+          break
+        }
+        else {
+          print("BACKING OFF!!")
+          level <- 4
+          backoff <- TRUE
+        }
+      }
+    
+      if(level == 4){ # fourgram lookup
+        print("Fourgram lookup!")
+        
+        if(backoff){
+          # shorten search string
+          lookup <- str_c(str_split(lookup, pattern = " ")[[1]][2:4], collapse = " ") # remove last word from search string
+          last <- str_c(str_split(lookup, pattern = " ")[[1]][4], collapse = " ")
+          print(paste("New lookup:", lookup))
+          
+          # retrieve matching fourgrams
+          fourgrams <- fourgram_lookup[base == lookup]
+          str(fourgrams)
+          print("Old values:")
+          print(fourgrams[prediction == last, .(base, prediction, mle)])
+          # discount MLE of failed fivegram
+          fourgrams[prediction == last, mle := 0.4 * mle] 
+          print("New values:")
+          print(fourgrams[prediction == last, .(base, prediction, mle)])
+        }
+        else {
+          fourgrams <- fourgram_lookup[base == lookup]
+        }
 
-  # fourgram lookup
-  lookup <- 
-  fourgram_lookup[base == lookup, mle := 0.4*mle] # apply discount
-  prediction <- fourgram_lookup[base == lookup][1]$prediction
+        # lookup fourgram with highest MLE
+        prediction <- fourgrams[1]$prediction
+        print(paste("Prediction:", prediction))
+        
+        if(!is.na(prediction)){
+          print("FOUND FOURGRAM!")
+          print("Alternatives:")
+          print(fourgram_lookup[base == lookup])
+          return(prediction)
+          break
+        }
+        else {
+          level <- 3
+          backoff <- TRUE
+        }
+        
+      }
+    
+      if(level == 3){ # trigram lookup
+        print("Trigram lookup!")
+        
+        if(backoff){
+          # shorten search string
+          lookup <- str_c(str_split(lookup, pattern = " ")[[1]][2:3], collapse = " ") # remove last word from search string
+          last <- str_c(str_split(lookup, pattern = " ")[[1]][3], collapse = " ")
+          print(paste("New lookup:", lookup))
+          
+          # retrieve matching trigrams
+          trigrams <- trigram_lookup[base == lookup]
+          str(trigrams)
+          print("Old values:")
+          print(trigrams[prediction == last, .(base, prediction, mle)])
+          # discount MLE of failed fourgram
+          trigrams[prediction == last, mle := 0.4 * mle]
+          print("New values:")
+          print(trigrams[prediction == last, .(base, prediction, mle)])
+        }
+        else {
+          trigrams <- trigram_lookup[base == lookup]
+        }
+
+        # lookup trigram with highest MLE
+        prediction <- trigrams[1]$prediction
+        print(paste("Prediction:", prediction))
+        
+        if(!is.na(prediction)){
+          print("FOUND TRIGRAM!")
+          print("Alternatives:")
+          print(trigram_lookup[base == lookup])
+          return(prediction)
+          break
+        }
+        else {
+          level <- 2
+          backoff <- TRUE
+        }
+      }
+        
+      if(level == 2){ # bigram lookup
+        print("Bigram lookup!")
+        
+        if(backoff){
+          # shorten search string
+          lookup <- str_c(str_split(lookup, pattern = " ")[[1]][1:1], collapse = " ") # remove last word from search string
+          last <- str_c(str_split(lookup, pattern = " ")[[1]][2], collapse = " ")
+          print(paste("New lookup:", lookup))
+          
+          # retrieve matching bigrams
+          bigrams <- bigram_lookup[base == lookup]
+          print("Old values:")
+          print(bigrams[prediction == last, .(base, prediction, mle)])
+          
+          # discount MLE of failed trigram
+          bigrams[prediction == last, mle := 0.4 * mle]
+          print("New values:")
+          print(bigrams[prediction == last, .(base, prediction, mle)])
+        }
+        else {
+          bigrams <- bigram_lookup[base == lookup]
+        }
+
+        # lookup bigram with highest MLE
+        prediction <- bigrams[1]$prediction
+        print(paste("Prediction:", prediction))
+        
+        if(!is.na(prediction)){
+          print("FOUND BIGRAM!")
+          print("Alternatives:")
+          print(bigram_lookup[base == lookup])
+          return(prediction)
+          break
+        }
+        else {
+          print("PLEASE ENTER SOME MORE WORDS!!")
+        }
+      }
+    
+    } # end of ngram_lookup
+    
+    ngram_lookup(selection, start_level)
   
-  if(!is.na(prediction)){
-    print("FOUND SOMETHING!")
-    return(prediction)
-    break
-  }
-  # trigram lookup
-  trigram_lookup[base == lookup, mle := 0.4*mle] # apply discount
-  prediction <- fourgram_lookup[base == lookup][1]$prediction
-  
-  if(!is.na(prediction)){
-    print("FOUND SOMETHING!")
-    return(prediction)
-    break
-  }
 }
 
 ```
-
-
-
-https://youtu.be/NlmKb0X-nkA
-
 
 ## Ideas for improvement
 

@@ -1,38 +1,84 @@
 Data Science Capstone Text Prediction
 ========================================================
 author: Codrin Kruijne
-date: 08/06/2018
+date: 17/06/2018
 autosize: true
 
-First Slide
+Text prediction challenge
 ========================================================
 
-For more details on authoring R presentations please visit <https://support.rstudio.com/hc/en-us/articles/200486468>.
+* A simple text prediction web application was requested
+* Text from Twitter, News sites and Blogs were provided
+* A language model was trained based on word combinations (ngrams)
+* The model was evaluated on a seperate testing dataset
+* A Shiny web app takes text input, applies the model and suggests a probable next word
 
-- Bullet 1
-- Bullet 2
-- Bullet 3
-
-Second SLide
+Predicting the newxt word; creating a language model
 ========================================================
+* Language modeling was done by analysing ngram frequency
+* Ngrams are combinations of words next to each other
+* Given texts were preprocessed and arranged as ngrams
+* Ngrams we split as base word(s) and final word
+* For each ngram base found, the frequency of following words was counted
+* Given ngram and final word counts Maximum Likelihood Estimates for these final words given the ngram were calculated
+* Ordered lookup tables were created for the Shiny app with base, MLE and prediction
 
-```{r}
-summary(cars)
+Language model creation: Preprocessing
+========================================================
+To be able to offer predictions we neede to deal with contracted words, abbreviations, numbers, dates, measurements, smileys and other unicode characters.
+
+* Model building
+To improve processing time of the training code and responsiveness of the app
++ [Tidy Text Mining](https://www.tidytextmining.com) was used to explore simple processing
++ [QDAP](https://trinker.github.io/qdap/) was used for text cleaning
++ [Qanteda package](http://quanteda.io) was used for corpus creation, preprocessing and ngram extraction
++ [Tidyverse packages](https://www.tidyverse.org/) were used for simple ngram rearranging into base word(s) and final word
++ [data.table package](http://r-datatable.com) was used for fast counting of frequencies and calculating MLEs
++ [Parallel package](http://stat.ethz.ch/R-manual/R-devel/library/parallel/doc/parallel.pdf) was used to run several functions in parallel to speed up processing
+* Bigram, trigram fourgram and fivegram models were created
+
+Language model performance; Code optimisation and Perplexity
+========================================================
+* Model performance
++ Add-k smoothing was implemented to deal with rare occurences. 
++ Perplexity is a measure that expresses the how well a model can predict a test set; lower is better
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
+test_results <- readRDS("WordPredictor/data/model_perplexities.rds")
+knitr::kable(test_results, caption = "Language model performance: Perplexity on test set")
 ```
 
-Third Slide
+* Model improvement
+To improve the effectiveness of language model we could
++ Improve preprocessing by removing abbreviations, other languages, measurements, etc.
++ Use more sophisticated smoothing in langiage model like Good-Turing or Kneser-Ney
++ Add a background lanuage model to deal with words missing in training text
++ Create seperate genre models for types of text: people probably write differently for Twitter than for blogs
+
+
+Shiny web application and further development
 ========================================================
+* How does it work?
++ The Shiny web app allows users to put in any text
++ The input text is cleaned from contractions, numbers, abbreviations, etc. (in the same way as with model making and testing)
++ The app then parses the text and extracts the final words (max 4) as input
++ The app looks up the input in the lookup tables from the language models
++ If no result is found in a higher order table (e.g. fivegram), it will "back off" to a lower order model (fourgram) until a result is predicted.
++ The app returns a prediction: the word with the highest likelihood (MLE) given the input text
 
-```{r, echo=FALSE}
-plot(cars)
-```
+You can try out the app here: <https://codrin.shinyapps.io/WordPredictor/>
 
-Fourth Slide
+* Further development
+To improve code efficiency we could
++ Do more elaborate code profiling
++ Experiment with faster lookup strategies, e.g. by word.
+
+Assignment
 ========================================================
+- Create a slide deck promoting your product. Write 5 slides using RStudio Presenter explaining your product and why it is awesome!
 
+Questions to consider
 
-
-
-Fifth Slide
-========================================================
-
+- How can you briefly explain how your predictive model works?
+- How can you succinctly quantitatively summarize the performance of your prediction algorithm?
+- How can you show the user how the product works?
