@@ -12,8 +12,9 @@ Text prediction challenge
 * A language model was trained based on observed word combinations (ngrams)
 * The model was evaluated on a seperate testing dataset
 * A Shiny web app was created that takes text input, applies the model and suggests a probable next word
-* MODEL PERFORMANCE
-* FUTURE DEVELOPMENTS
+* Model performance was calculated; higher ngram models predict better but are a strain on performance
+* Model could be improved by better preprocessing and more sophisticated approaches to dealing with rare or unseen occurances
+* Managing memory use and processing time was a challenge for these large amounts of trianing data and better code profiling needs to be performed
 
 Predicting the next word; creating a language model
 ========================================================
@@ -44,7 +45,7 @@ Language model performance; Perplexity and Accuracy
 test_results <- readRDS("WordPredictor/data/model_perplexities.rds")
 knitr::kable(test_results, caption = "Language model performance: Perplexity on test set")
 ```
-  + ACCURACY?!
+  + Working on accuracy measurements for first, second and third word prediction, but computation still takes too long
 
 * Model improvement  
 To improve the effectiveness of language model we could:  

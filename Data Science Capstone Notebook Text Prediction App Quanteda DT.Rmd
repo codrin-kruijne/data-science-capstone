@@ -190,8 +190,6 @@ rm(test_ind)
 
 ```
 
-
-
 # Preprocessing: tokenizing
 
 ```{r cache=TRUE}
@@ -385,7 +383,7 @@ system.time(ngram_model(train_tokens, "fivegram", 5, smoother = 1, voc_size = tr
 
 ngram_probs <- function(ngram_mle) {
 
-  dt <- data.table(ngram_mle[!is.na(follow)]) # select relevant columns and unique rows
+  dt <- data.table(ngram_mle) # select relevant columns and unique rows
   dt <- unique(dt[, .(mle), by = .(base, follow)])
   dt[order(-mle), .(follow, mle), by = base # order by mle
      ][order(-mle), .SD[1:10], by = base] # top 10

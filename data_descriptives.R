@@ -87,7 +87,8 @@ blogs_n <- collection_count %>%
            coord_flip() +
            ggtitle("Blogs")
 
-sources_n <- grid.arrange(twitter_n, news_n, blogs_n, ncol = 3)
+sources_n <- arrangeGrob(twitter_n, news_n, blogs_n, ncol = 3)
+ggsave(file = "WordPredictor/www/sources_n.png", sources_n)
 
 # Excluding stopwords frequency plots
 
@@ -115,7 +116,8 @@ blogs_stop <- collection_stop %>%
               coord_flip() +
               ggtitle("Blogs")
 
-sources_stop <- grid.arrange(twitter_stop, blogs_stop, news_stop, ncol = 3)
+sources_stop <- arrangeGrob(twitter_stop, blogs_stop, news_stop, ncol = 3)
+ggsave(file = "WordPredictor/www/sources_stop.png", sources_stop)
 
 # By TF-IDF plots
 
@@ -143,4 +145,5 @@ blogs_tf_idf <- collection_tf_idf %>%
                 coord_flip() +
                 ggtitle("Blogs")
 
-sources_tf_idf <- grid.arrange(twitter_tf_idf, blogs_tf_idf, news_tf_idf, ncol = 3)
+sources_tf_idf <- arrangeGrob(twitter_tf_idf, blogs_tf_idf, news_tf_idf, ncol = 3)
+ggsave(file = "WordPredictor/www/sources_tf_idf.png", sources_tf_idf)
